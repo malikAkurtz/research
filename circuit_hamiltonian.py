@@ -44,33 +44,17 @@ class Circuit:
     using the method of nodes.
     """
     def __init__(self, graph_rep: dict):
-        self.labels                                           = ["gnd"] + graph_rep["nodes"]
+        self.labels                                           = graph_rep["nodes"]
         self.circuit_graph                                    = Circuit._build_master_graph(graph_rep)
         self.capacitive_sub_graph, self.inductive_sub_graph   = self._build_sub_graphs()
         self.active_nodes, self.passive_nodes                 = self._partition_nodes()
         self.N                                                = len(self.active_nodes)
         self.P                                                = self.N + len(self.passive_nodes)
         self.capacitance_matrix, self.inv_inductance_matrix   = self._build_matrices()
-        self.offset_matrix                                    = self._build_offset_matrix(graph_rep)
-    
-    def _build_offset_matrix(self, graph_rep):
-        matrix = np.zeros((self.P, self.P))
-        
-        for offset in graph_rep["external_flux"]:
-            node1_label = offset[0]
-            node2_label = offset[1]
-            value = offset[2]
-            
-            j = self.labels.index(node1_label)
-            k = self.labels.index(node2_label)
-            
-            matrix[j][k] = value
-            matrix[k][j] = value
-            
-        matrix = np.delete(matrix, 0, axis=0)
-        matrix = np.delete(matrix, 0, axis=1)
-            
-        return matrix
+        self.inv_capacitance_matrix                           = np.linalg.inv(self.capacitance_matrix)
+        self.offset_dict                                      = graph_rep["external_flux"]
+        self.omega_squared                                    = self._build_omega_squared()
+        self.normal_modes_squared, self.normal_vecs_squared   = np.linalg.eig(self.omega_squared)
                          
     @staticmethod
     def _build_master_graph(graph_rep: dict) -> Graph:
@@ -118,7 +102,7 @@ class Circuit:
             
         # break symmetry
         for node in nodes.values():
-            if node_label == "gnd":
+            if node.label == "gnd":
                 continue
             capacitive_element = False
             for branch in node.branches:
@@ -154,11 +138,10 @@ class Circuit:
         active_nodes    = []
         passive_nodes   = []
         
-        print(self.circuit_graph.vertices)
         # assuming symmetry already broken, only have to check inductive degree
         for node_label, node in self.circuit_graph.vertices.items():
             capacitive_degree, inductive_degree = node._get_degree()
-            if (inductive_degree >= 0):
+            if (inductive_degree > 0):
                 active_nodes.append(node)
             else:
                 passive_nodes.append(node)
@@ -170,12 +153,21 @@ class Circuit:
         inv_inductance_matrix   = np.zeros((self.P, self.P))
         
         for branch in self.circuit_graph.edges:
+            # e.g. "a", "b", etc.
             node1_label = branch.nodes[0].label
             node2_label = branch.nodes[1].label
             
-            j = self.labels.index(node1_label)
-            k = self.labels.index(node2_label)
+            # get index of label from nodes = ["a", "b", "c", ...,]
+            if node1_label == "gnd":
+                j = 0
+            else:
+                j = self.labels.index(node1_label) + 1
             
+            if node2_label == "gnd":
+                k = 0
+            else:
+                k = self.labels.index(node2_label) + 1
+                        
             if branch.type == "C":
                 capacitance_matrix[j][k] += -branch.value
                 capacitance_matrix[k][j] += -branch.value
@@ -195,24 +187,36 @@ class Circuit:
     
         return capacitance_matrix, inv_inductance_matrix
     
-    def get_kinetic_energy(self, node_flux_dot):
+    def _get_node_flux_dot(self, charge):
+        return self.inv_capacitance_matrix @ charge
+    
+    def get_kinetic_energy(self, charge):
+        node_flux_dot = self._get_node_flux_dot(charge)
         return (node_flux_dot.T @ self.capacitance_matrix @ node_flux_dot) / 2
     
-    def get_potential_energy(self, node_flux, T):
+    def get_potential_energy(self, node_flux):
         term_1 = (node_flux.T @ self.inv_inductance_matrix @ node_flux) / 2
         
         term_2 = 0
-        for branch in self.circuit_graph:
-            if branch not in T.edges:
-                node1_label = branch.nodes[0].label
-                node2_label = branch.nodes[1].label
+        # loop through offsets and add their terms
+        for (node1_label, node2_label), offset in self.offset_dict.items():
                 
                 j = self.labels.index(node1_label)
                 k = self.labels.index(node2_label)
                 
-                term_2 += ((node_flux[j] - node_flux[k]) * self.offset_matrix[j][k]) / branch.value
+                inductance = -1 / self.inv_inductance_matrix[j][k]
+                term_2 += ((node_flux[j] - node_flux[k]) * offset) / inductance
         
         return term_1 + term_2
+    
+    def get_lagrangian(self, node_flux, charge):
+        return self.get_kinetic_energy(charge) - self.get_potential_energy(node_flux)
+    
+    def _build_omega_squared(self):
+        return self.inv_capacitance_matrix @ self.inv_inductance_matrix
+    
+    def get_hamiltonian(self, node_flux, charge):
+        return 0.5 * (charge.T @ self.inv_capacitance_matrix @ charge) + self.get_potential_energy(node_flux)
     
     def connectivity(self):
         s = ""
@@ -231,36 +235,7 @@ class Circuit:
         return self.connectivity()
 ######################################## CIRCUIT CLASS ########################################
 
-    # Black box function, straight from Gemini
-    def _build_min_spanning_tree(self):
-        root = self.circuit_graph.vertices["gnd"]
-        visited_nodes = {root}
-        tree_edges = []
-        
-        # We use a queue for BFS: (current_node)
-        queue = [root]
-        
-        # Get all edges, but prioritize Capacitors over Inductors
-        # This makes the 'Tree' as capacitive as possible
-        all_edges = sorted(self.circuit_graph.edges, 
-                           key=lambda b: 0 if b.type == "C" else 1)
 
-        while queue:
-            current_node = queue.pop(0)
-            
-            # Look at all branches connected to this node
-            for branch in current_node.branches:
-                # Find the 'other' node in the branch
-                other_node = branch.nodes[1] if branch.nodes[0] == current_node else branch.nodes[0]
-                
-                if other_node not in visited_nodes:
-                    # This branch is now part of our spanning tree
-                    visited_nodes.add(other_node)
-                    tree_edges.append(branch)
-                    queue.append(other_node)
-        
-        # The vertices of the tree are the same as the original graph
-        return Graph(list(self.circuit_graph.vertices.values()), tree_edges)
     
 def main():
     graph_rep = \
@@ -269,7 +244,9 @@ def main():
         'capacitors': [
             ('a', 'gnd', 1e-12),
             ('b', 'gnd', 2e-12),
+            ('c', 'gnd', 1e-13),
             ('a', 'b', 0.5e-12),
+            ('b', 'c', 0.2e-13),
         ],
         'inductors': [
             ('a', 'b', 1e-9),
@@ -285,6 +262,29 @@ def main():
     print(circuit)
     print(circuit.inv_inductance_matrix)
     print(circuit.capacitance_matrix)
+    
+    # Node Flux Vector (Webers) - Represents the coordinates
+    phi_test = np.array([
+        0.1e-15,   # Node 'a' - 0.05 Φ₀
+        0.05e-15,  # Node 'b' - 0.025 Φ₀
+        0.02e-15   # Node 'c' - 0.01 Φ₀
+    ])
+    
+    # Node Charge Vector (Coulombs) - Represents the momenta
+    # Scale: e ≈ 1.6e-19 C (electron charge)
+    # Using ~1000 electron charges for realistic quantum circuit values
+    q_test = np.array([
+        0.2e-15,   # ~1250e on node 'a'
+        0.1e-15,   # ~625e on node 'b'
+        0.05e-15   # ~312e on node 'c'
+    ])
+    
+    print(f"Potential Energy: {circuit.get_potential_energy(node_flux=phi_test)}")
+    print(f"Kinetic Energy: {circuit.get_kinetic_energy(charge=q_test)}")
+    print(f"Lagrangian: {circuit.get_lagrangian(node_flux=phi_test, charge=q_test)}")
+    print(f"Normal Modes Squared: {circuit.normal_modes_squared}")
+    print(f"Hamiltonian: {circuit.get_hamiltonian(node_flux=phi_test, charge=q_test)}")
+    
     
 if __name__=="__main__":
     main()
