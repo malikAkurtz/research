@@ -1,13 +1,8 @@
 import numpy as np
 import matplotlib.pyplot as plt
+from scipy.constants import h, hbar, e
 
 # Transmon + SFQ pulse train + Crank–Nicolson Rabi simulation (AG)
-
-# Physical constants
-h       = 6.62607015e-34      # Planck constant [J·s]
-h_bar   = h/(2*np.pi)
-q       =1.6e-19;             # electron chrage in Coulombs 
-
 
 # Transmon parameters
 fC        = 250e6           # Charging energy frequency EC/h [Hz]
@@ -17,7 +12,7 @@ EJ        = EJ_EC * EC      # Josephson energy [J]
 
 # Charge basis (|n> states)
 n_cut = 20                                  # max |n| to keep
-n     = [i for i in range(-n_cut, n_cut+1)] # integer charge states
+n     = [i for i in range(-n_cut, n_cut+1)] # e.g. [-20, -19, ..., 0, ..., 19, 20] for n_cut = 20
 N     = len(n)                              # Hilbert space dimension
 print(f"N: {N}")
 
