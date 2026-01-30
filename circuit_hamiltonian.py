@@ -2,8 +2,9 @@ from __future__ import annotations
 from typing import Optional
 import numpy as np
 import matplotlib.pyplot as plt
-from scipy.constants import hbar, e
+from scipy.constants import h, hbar, e
 PHI_0 = hbar / (2 * e)
+PHI_h = h / (2 * e)
 
 ######################################## NODE CLASS ########################################
 class Node:
@@ -64,8 +65,9 @@ class Circuit:
     Circuit class to build and store relevant data for a circuit
     using the method of nodes.
     """
-    def __init__(self, graph_rep: dict):
+    def __init__(self, graph_rep: dict, n_cut: int):
         self.labels                                           = graph_rep["nodes"]                     # ["a", "b", "c", etc.]
+        self.n_cut                                            = n_cut
         self.circuit_graph                                    = Circuit._build_master_graph(graph_rep) # collection of edges,vertices
         self.capacitive_sub_graph, self.inductive_sub_graph   = self._build_sub_graphs() # capactive edges,vertices + inductive edges,vertices
         self.active_nodes, self.passive_nodes                 = self._partition_nodes()
@@ -77,9 +79,9 @@ class Circuit:
         self.omega_squared                                    = self._build_omega_squared()
         self.normal_modes_squared, self.normal_vecs_squared   = np.linalg.eig(self.omega_squared)
         self.josephson_junctions                              = graph_rep["josephson_junctions"]
-        self.n_hat, self.H_hat                                = self._quantize(n_cut=20)
-        self.H_eigenvalues, self.H_eigenvectors               = self._diagonalize()
-        self.D                                                = np.diag(self.H_eigenvalues)
+        self.n_hat, self.H_hat                                = self._quantize(n_cut=self.n_cut)
+        self.energies, self.states                            = self._diagonalize()
+        self.n_hat_energy                                     = self._change_basis()
         
                          
     @staticmethod
@@ -302,7 +304,7 @@ class Circuit:
         # Define Hilbert space
         # e.g. [-20, -19, ..., 0, ..., 19, 20] for n_cut = 20
         # each n represents n Cooper pairs on the island
-        n_vals = [i for i in range(-n_cut, n_cut+1)] 
+        n_vals = np.array([i for i in range(-n_cut, n_cut+1)])
         dim = len(n_vals)
         n_hat = np.diag(4 * EC * n_vals**2)
         
@@ -314,6 +316,9 @@ class Circuit:
     def _diagonalize(self):
         return np.linalg.eigh(self.H_hat)
         
+    def _change_basis(self):
+        return np.conjugate(self.states).T @ self.n_hat @ self.states
+    
     def connectivity(self):
         s = ""
         s += "--- Circuit Connectivity -\n"
@@ -335,30 +340,63 @@ class Circuit:
     def __repr__(self):
         return self.connectivity()
 ######################################## CIRCUIT CLASS ########################################
-
-def visualize_potential(circuit, flux_range=(-10e-15, 10e-15), num_points=100):
-    """Plot the potential energy landscape"""
-    phi_vals = np.linspace(*flux_range, num_points)
+      
+def plot_charge_distribution(circuit, n_cut=20):
+    # 1. Define the x-axis (number of Cooper pairs)
+    n_vals = np.arange(-n_cut, n_cut + 1)
     
-    # for every node in the circuit
-    for i, node_label in enumerate(circuit.labels):
-        # set the flux at that node to one of phi_vals, keeping all other nodes at 0
-        # and store the resulting potential energy
-        potentials = []
-        for phi in phi_vals:
-            node_flux = np.zeros(circuit.N)
-            node_flux[i] = phi
-            potentials.append(circuit.get_potential_energy(node_flux))
-        
-        plt.plot(phi_vals, potentials, label=f'Node {node_label}')
+    # 2. Get the ground state (first column) and first excited state (second column)
+    ground_state = circuit.states[:, 0]
+    excited_state = circuit.states[:, 1]
     
-    plt.xlabel('Node Flux (Wb)')
-    plt.ylabel('Potential Energy (J)')
-    plt.title('Circuit Potential Energy Landscape')
+    # 3. Create the plot
+    plt.figure(figsize=(10, 6))
+    
+    # Plotting Ground State (|0>)
+    plt.plot(n_vals, ground_state, 'o-', label='Ground State |0>', markersize=4)
+    
+    # Plotting First Excited State (|1>)
+    plt.plot(n_vals, excited_state, 's-', label='First Excited State |1>', markersize=4)
+    
+    plt.axvline(0, color='black', linestyle='--', alpha=0.3)
+    plt.xlabel('Number of Cooper Pairs (n)')
+    plt.ylabel('Amplitude')
+    plt.title('Transmon Wavefunctions in Charge Basis')
     plt.legend()
-    plt.grid(True)
+    plt.grid(True, alpha=0.3)
     plt.show()
+    
+def plot_Josephson_potential(circuit, min_flux, max_flux):
+    node_phases = np.linspace(min_flux, max_flux, 400)
+    
+    # Josephson potential [J]
+    U = np.array([])
+    
+    # Calculate different values for Josephson potential
+    # depending on node flux
+    for node_phase in node_phases:
+        # Convert phase (dimensionless) to flux (Webers)
+        node_flux = node_phase * PHI_0
+        U = np.append(U, circuit.get_potential_energy([node_flux]))
+    
+    # Plot Josephson potential
+    plt.plot(node_phases, U / e / 1e-3, 'r', linewidth=3, label='Josephson potential')
 
+    # Overlay lowest energy eigenvalues
+    for k in range(6):  # ground, first, second excited, etc.
+        plt.hlines(circuit.energies[k] / e / 1e-3, xmin=min_flux, xmax=max_flux,
+                colors='k', linewidth=2, linestyles='-', label="Energy Level" if k == 0 else None)
+    
+    # Labels and formatting
+    plt.xlabel(r'Phase $\phi$', fontsize=15)
+    plt.ylabel('Energy (meV)', fontsize=15)
+    plt.axis([min_flux, max_flux, None, None]) 
+    plt.xticks([-np.pi, -np.pi/2, 0, np.pi/2, np.pi], 
+               [r'$-\pi$', r'$-\pi/2$', '0', r'$\pi/2$', r'$\pi$'])
+    plt.grid(alpha=0.3)
+    plt.show()
+    
+    
 def main():
     # Cooper Pair Box / Transmon-like circuit
     # Just a Josephson junction with shunt capacitance (no linear inductor)
@@ -367,6 +405,9 @@ def main():
     EJ = 20e-23      # ~20 GHz Josephson energy (h * 20 GHz ≈ 1.3e-23 J)
     CJ = 5e-15       # 5 fF junction capacitance
     CS = 100e-15 # 100 fF shunt capacitance (transmon regime)
+    
+    # Define the dimension of our charge basis
+    n_cut = 20
     
     graph_rep = {
         'nodes': ['a'],
@@ -378,7 +419,7 @@ def main():
         'external_flux': {}
     }
     
-    circuit = Circuit(graph_rep)
+    circuit = Circuit(graph_rep=graph_rep, n_cut=n_cut)
     
     for node in circuit.active_nodes:
         print(f"  Active node: {node.label}")
@@ -387,20 +428,24 @@ def main():
     
     print(circuit)
     print(f"Capacitance Matrix: {circuit.capacitance_matrix}")
+    C_sum = circuit.capacitance_matrix[0][0]
+    EC = e**2 / (2*C_sum)
     print(f"Inverse Inductance Matrix: {circuit.inv_inductance_matrix}")    
+        
+    # plot_charge_distribution(circuit, n_cut=20)
     
-    PHI_0 = hbar / (2 * e)
-    phi_test = np.zeros(circuit.N, dtype=float).reshape(-1)  # Force 1D
-    phi_test[0] = 0.1 * PHI_0 
-    q_test = (np.ones(circuit.N) * 1e-19).reshape(-1)  # Force 1D
+    # plot_Josephson_potential(circuit=circuit, min_flux=-np.pi, max_flux=np.pi)
     
-    print(f"Potential Energy: {circuit.get_potential_energy(node_flux=phi_test)}")
-    print(f"Kinetic Energy: {circuit.get_kinetic_energy(node_charge=q_test)}")
-    print(f"Lagrangian: {circuit.get_lagrangian(node_flux=phi_test, node_charge=q_test)}")
-    print(f"Normal Modes Squared: {circuit.normal_modes_squared}")
-    print(f"Hamiltonian: {circuit.get_hamiltonian(node_flux=phi_test, node_charge=q_test)}")
+    print(f"# Energy Levels: {circuit.states.shape[0]}")
     
-    # visualize_potential(circuit=circuit)
+    f0, f1, f2 = circuit.energies[0:3] / h / 1e9 # Convert to GHz
+    alpha = (f2 - f1) - (f1 - f0)
+    
+    print("Transmon parameters:")
+    print(f"  EC/h  = {(EC / h):.3f} GHz")
+    print(f"  EJ/EC = {(EJ / EC):.1f}")
+    print(f"  Anharmonicity = {alpha:.3f} GHz")
+    
     
     
 if __name__=="__main__":
