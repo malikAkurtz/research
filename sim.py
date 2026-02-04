@@ -60,11 +60,11 @@ phi = np.linspace(-np.pi, np.pi, 400)
 U = -EJ * np.cos(phi)
 
 # Plot Josephson potential
-plt.plot(phi, U / q / 1e-3, 'r', linewidth=3, label='Josephson potential')
+plt.plot(phi, U / e / 1e-3, 'r', linewidth=3, label='Josephson potential')
 
 # Overlay lowest energy eigenvalues
 for k in range(6):  # ground, first, second excited
-    plt.hlines(evals[k] / q / 1e-3, xmin=-np.pi, xmax=np.pi,
+    plt.hlines(evals[k] / e / 1e-3, xmin=-np.pi, xmax=np.pi,
                colors='k', linewidth=2, linestyles='-', label="Energy Level" if k == 0 else None)
 
 # Labels and formatting
@@ -149,8 +149,8 @@ for it in range(Nt):
 
     # Crank–Nicolson update matrices:
     # (I + i*dt/(2*hbar) * H_mid) * psi_next = (I - i*dt/(2*hbar) * H_mid) * psi_now
-    A_mat = I_sub + (1j * dt / (2 * h_bar)) * H_mid
-    B_mat = I_sub - (1j * dt / (2 * h_bar)) * H_mid
+    A_mat = I_sub + (1j * dt / (2 * hbar)) * H_mid
+    B_mat = I_sub - (1j * dt / (2 * hbar)) * H_mid
 
     # Solve the linear system A_mat * psi = B_mat * psi_old
     psi = np.linalg.solve(A_mat, B_mat @ psi)
@@ -167,7 +167,7 @@ for it in range(Nt):
 
 # Figure 2: Pulse sequence (First 1000 steps)
 plt.figure(figsize=(8, 4))
-plt.plot(t_vec[:1000] * 1e9, At[:1000] / q / 1e-3, linewidth=2)
+plt.plot(t_vec[:1000] * 1e9, At[:1000] / e / 1e-3, linewidth=2)
 plt.xlabel('Time (ns)')
 plt.ylabel('Pulse (meV)')
 plt.title('SFQ Pulse shape')
