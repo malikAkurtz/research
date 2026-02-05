@@ -1,85 +1,238 @@
+from __future__ import annotations
 import numpy as np
 
-
-def simplex(tableu: np.ndarray, num_basic_vars: int):
-    # assuming basic var cols are after non-basic
-    # assuming z row is tableu[0]
-    
-    # total number of columns i.e. total number variables
-    N = len(tableu[0]) - 1 # - 1 for rhs column
-    # total number of decision variables
-    n = N - num_basic_vars
-    
-    # list of indices corresponding to the basic variables at any given moment
-    basic_vars = [i for i in range(n, N)]
-
-    new_tableu = tableu.copy()
-    
-    while True:
-        # Find the new basic variable
-        most_negative_col_idx = 0
-        most_negative_val = new_tableu[0][most_negative_col_idx]
-        
-        for i in range(N):
-            z_row = new_tableu[0]
-            rhs_col = new_tableu[:, -1]
-            candidate_val = z_row[i]
-            
-            if candidate_val < most_negative_val:
-                most_negative_val = candidate_val
-                most_negative_col_idx = i
+class System():
+    def __init__(self, num_decision_vars: int, constraints: list[Constraint], objective: Objective):
+        self.num_decision_vars  = num_decision_vars
+        self.num_slack_vars     = 0
+        self.num_artifical_vars = 0
+        self.num_constraints    = len(constraints)
+        self.constraints        = constraints
+        self.objective          = objective
+        self.A                  = np.array([-1 * coef for coef in self.constraints] + self.objective.coefficients)
+        self.slack_var_idx      = []
+        self.artifical_var_idx  = []
+        self.num_vars           = None
+        self.artifical_vars     = False
                 
-        # if after checking all columns, there are no negative values
-        if most_negative_val >= 0:
-            # then we are done running the Simplex algorithm
-            break
-        # Otherwise, we need to alter the basic variables, clear the 
-        else:        
-            pivot_col_idx = most_negative_col_idx
-            pivot_col = new_tableu[:, pivot_col_idx]
-
-            # ratio test
-            possible_vals = [rhs_col[i] / pivot_col[i] if not (rhs_col[i] / pivot_col[i] > 0) else np.inf for i in range(1, len(pivot_col))]
-            
-            leaving_basic_var_idx = np.argmin(possible_vals)            
-            basic_vars[leaving_basic_var_idx] = pivot_col_idx
-            
-            # clear the column corresponding to the new basic variable
-            pivot_row_idx = leaving_basic_var_idx + 1 # to account for the z row in the tableu
-            pivot_value = new_tableu[pivot_row_idx][pivot_col_idx]
-            
-            new_tableu[pivot_row_idx] = new_tableu[pivot_row_idx]  / pivot_value # pivot_value = 1
-            
-            pivot_row = new_tableu[pivot_row_idx]
-            
-            for i in range(num_basic_vars + 1):
-                if i == pivot_row_idx:
-                    continue
-                else:
-                    row_value = new_tableu[i][pivot_col_idx]
-                    new_tableu[i] = new_tableu[i] + (-row_value * pivot_row)
-            
-    # idx 0 <=> x_0, idx 1 <=> x_1, etc
-    optimal_vals = np.zeros(n, dtype=float)
+    def _standardize(self):
+        # Make sure we are maximizing the objective row
+        if self.objective.obj == "max":
+            self.A[-1] = -1 * self.A[-1]
+        # For each constraint
+        for i in range(self.num_constraints):
+            c            = self.constraints[i]
+            row          = self.A[i]
+            # 1) Ensure rhs >= 0
+            if row[-1] < 0:
+                # Multiply the rhs and coefficients by -1 and flip the type
+                row[-1]      *= -1
+                row[:-1]     *= -1
+                c._flip_type()
+            # 2) Add artificial variables if type is equality
+            if c.type == "=":
+                # Add artifical variable
+                self._add_artifical_variable(idx=i)
+            # 3) Subtract slack variable, add artifical variable
+            elif c.type == ">=":
+                # Subtract Slack variable
+                self._subtract_slack_variable(idx=i)
+                # Add artifical variable
+                self._add_artifical_variable(idx=i)
+                # Change type to equality
+                c.type = "="
+            # 3) Add slack variable
+            elif c.type == "<=":
+                # Add slack variable
+                self._add_slack_variable(idx=i)
+                # Change type to equality
+                c.type = "="
+                
+        self.num_vars = self.num_decision_vars + self.num_slack_vars + self.num_artifical_vars
+                
+    def _phase_1(self):
+        # Want to minimize the sum of all artifical variables
+        # i.e. maximize the sum of all negative artifical variables
+        phase_1_obj_coefs = np.zeros(self.num_vars)
+        for idx in self.artifical_var_idx:
+            phase_1_obj_coefs[idx] = 1 # since minimizing       
+        # Clear their corresponding columns
+        for i, idx in enumerate(self.artifical_var_idx):
+            self._clear_col(pivot_row_idx=i, pivot_col_idx=idx)
+        # Run simplex to minimize psuedo objective
+        optimal_vals, optimal_z = self._simplex(obj_row_idx=-1)
+        if optimal_z != 0:
+            print("Problem is Unfeasible!")
+            return
     
-    for idx, var_idx in enumerate(basic_vars):
-        # x_0, ..., x_n-1
-        if var_idx < n:
-            optimal_vals[var_idx] = new_tableu[:, -1][idx + 1]
-            
-    optimal_z = new_tableu[0][-1]
+    def _phase_2(self):
+        if self.artifical_vars:
+            # Get rid of artifical columns
+            for idx in self.artifical_var_idx:
+                self.A = np.delete(self.A, idx, axis=1)
+                
+            # Get rid of phase 1 objective row
+            self.A = np.delete(self.A, -1, axis=0)
         
-    return optimal_vals, optimal_z
+        # Run simpled with actual objective
+        return self._simplex(obj_row_index=-1)
+        
+    def _clear_col(self, pivot_row_idx: int, pivot_col_idx: int):
+        pivot_row = self.A[pivot_row_idx]
+        
+        for i in range(self.num_constraints + 2): # now including phase 1 and 2 objectives rows at the bottom
+            if i == pivot_row_idx:
+                continue
+            else:
+                row_value = self.A[i][pivot_col_idx]
+                if row_value != 0:
+                    self.A[i] = self.A[i] + (-row_value*pivot_row)
+        
+    def _add_artifical_variable(self, idx: int):
+        new_col                  = np.array(np.zeros(self.num_constraints))
+        new_col[idx][0]          = 1.0
+        self.A                   = np.insert(self.A, -1, new_col, axis=1)
+        self.num_artifical_vars += 1
+        self.artifical_var_idx.append(idx)
+    
+    def _add_slack_variable(self, idx: int):
+        new_col              = np.array(np.zeros(self.num_constraints))
+        new_col[idx][0]      = 1.0
+        self.A               = np.insert(self.A, -1, new_col, axis=1)
+        self.num_slack_vars += 1
+        self.slack_var_idx.append(idx)
+    
+    def _subtract_slack_variable(self, idx: int):
+        new_col              = np.array(np.zeros(self.num_constraints))
+        new_col[idx][0]      = -1.0
+        self.A               = np.insert(self.A, -1, new_col, axis=1)
+        self.num_slack_vars += 1
+        self.slack_var_idx.append(idx)
+        
+    def _simplex(self, obj_row_idx: int):
+        # assuming basic var cols are after non-basic
+        n = self.num_vars
+        m = self.num_constraints
+        num_basic_vars = n - m
+        
+        # list of indices corresponding to the basic variables at any given moment
+        basic_vars = [i for i in range(self.num_decision_vars, self.num_vars)]
+        
+        while True:
+            # Find the new basic variable
+            most_negative_col_idx = 0
+            most_negative_val = self.A[obj_row_idx][most_negative_col_idx]
+            
+            for i in range(self.num_vars):
+                obj_row = self.A[obj_row_idx]
+                rhs_col = self.A[:, -1]
+                candidate_val = obj_row[i]
+                
+                if candidate_val < most_negative_val:
+                    most_negative_val = candidate_val
+                    most_negative_col_idx = i
+                    
+            # if after checking all columns, there are no negative values
+            if most_negative_val >= 0:
+                # then we are done running the Simplex algorithm
+                break
+            # Otherwise, we need to alter the basic variables, clear the 
+            else:        
+                pivot_col_idx = most_negative_col_idx
+                pivot_col = self.A[:, pivot_col_idx]
+
+                # ratio test
+                possible_vals = [rhs_col[i] / pivot_col[i] if not (rhs_col[i] / pivot_col[i] > 0) else np.inf for i in range(1, len(pivot_col))]
+                
+                leaving_basic_var_idx = np.argmin(possible_vals)            
+                basic_vars[leaving_basic_var_idx] = pivot_col_idx
+                
+                # clear the column corresponding to the new basic variable
+                pivot_row_idx = leaving_basic_var_idx
+                pivot_value = self.A[pivot_row_idx][pivot_col_idx]
+                
+                self.A[pivot_row_idx] = self.A[pivot_row_idx]  / pivot_value # pivot_value = 1
+                
+                pivot_row = self.A[pivot_row_idx]
+                
+                for i in range(num_basic_vars):
+                    if i == pivot_row_idx:
+                        continue
+                    else:
+                        row_value = self.A[i][pivot_col_idx]
+                        self.A[i] = self.A[i] + (-row_value * pivot_row)
+                
+        # idx 0 <=> x_0, idx 1 <=> x_1, etc
+        optimal_vals = np.zeros(n, dtype=float)
+        
+        for idx, var_idx in enumerate(basic_vars):
+            # x_0, ..., x_n-1
+            if var_idx < n:
+                optimal_vals[var_idx] = self.A[:, -1][idx]
+                
+        optimal_z = self.A[obj_row_idx][-1]
+            
+        return optimal_vals, optimal_z
+
+class Objective():
+    def __init__(self, coefficients: np.ndarray, obj: str):
+        self.coefficients = coefficients
+        self.obj          = obj
+    
+class Constraint():
+    def __init__(self, coefficients: np.ndarray, type: str, rhs: float):
+        # len(coefficients) = # Decision Variables
+        self.coefficients = coefficients
+        self.type = type
+        self.rhs = rhs
+        
+    def _flip_type(self):
+        if self.type == "<=":
+            self.type = ">="
+        elif self.type == ">=":
+            self.type = "<="
+        # if self.type == "=":
+            # do nothing
+class Food():
+    def __init__(self, price: float, calories: float, carbs: float, fat: float, protein: float):
+        self.price = price
+        self.calories = calories
+        self.carbs = carbs
+        self.fat = fat
+        self.protein = protein
 
 def main():
-    inital_tableu = np.array([
-        [-3.0, -2.0, -4.0, 0.0, 0.0, 0.0, 0.0],
-        [1.0, 1.0, 2.0, 1.0, 0.0, 0.0, 4.0],
-        [2.0, 0.0, 3.0, 0.0, 1.0, 0.0, 5.0],
-        [2.0, 1.0, 3.0, 0.0, 0.0, 1.0, 7.0]
-    ])
+    # beef = Food(price=-1, calories=1.5, carbs=0, fat=0.0706, protein=0.2028)
+    # eggs = Food(price=-1, calories=60, carbs=0, fat=0.15, protein=6)
+    # milk = Food(price=-1, calories=0.634, carbs=0.0338, protein=0.0338)
+    obj = Objective(coefficients=[3.0, 2.0, 4.0], obj="max")
+    c0 = Constraint(
+        coefficients=np.array([1.0, 1.0, 2.0]),
+        type="<=",
+        rhs=4
+        )
+    c1 = Constraint(
+        coefficients=np.array([2.0, 0.0, 3.0]),
+        type="<=",
+        rhs=5
+        )
+    c2 = Constraint(
+        coefficients=np.array([2.0, 1.0, 3.0]),
+        type="<=",
+        rhs=7
+        )
+    system = System(
+        num_decision_vars=3,
+        constraints=[c0, c1, c2],
+        objective=obj
+        )
     
-    optimal_vals, optimal_z = simplex(tableu=inital_tableu, num_basic_vars=3)
+    # 1) Put system in standard form
+    system._standardize()
+    # 2) Run Phase 1
+    system._phase_1()
+    # 3) Run Phase 2
+    optimal_vals, optimal_z = system._phase_2()
     
     for idx, val in enumerate(optimal_vals):
         print(f"x_{idx} = {val}")
