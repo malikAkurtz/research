@@ -109,6 +109,36 @@ egg_constraint = Constraint(
     rhs=4.0 * 7
 )
 
+# rice constraint
+rice_coefs = np.zeros(len(foods))
+idx = list(foods.keys()).index("White Rice")
+rice_coefs[idx] = 1
+rice_constraint = Constraint(
+    coefficients=np.array(rice_coefs),
+    type="<=",
+    rhs=0.0
+)
+
+# creamer constraint
+creamer_coefs = np.zeros(len(foods))
+idx = list(foods.keys()).index("Creamer")
+creamer_coefs[idx] = 1
+creamer_constraint = Constraint(
+    coefficients=np.array(creamer_coefs),
+    type="<=",
+    rhs=0.0
+)
+
+# creamer constraint
+milk_coefs = np.zeros(len(foods))
+idx = list(foods.keys()).index("Milk")
+milk_coefs[idx] = 1
+milk_constraint = Constraint(
+    coefficients=np.array(milk_coefs),
+    type=">=",
+    rhs=230.0 * 7
+)
+
 diet_constraints=[
             carb_constraint,
             fat_constraint,
@@ -120,5 +150,8 @@ diet_constraints=[
             cod_constraint,
             salmon_constraint,
             beef_constraint,
-            egg_constraint
+            egg_constraint,
+            # rice_constraint,
+            creamer_constraint,
+            milk_constraint
             ]

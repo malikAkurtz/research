@@ -1,0 +1,12 @@
+Beef = 400.0 g
+Egg = 28.0 Eggs
+Chicken = 1382.1743579441209 g
+Creamer = 1077.0430610751778 ml
+Protein Powder = 7.0 scoops
+Peanut Butter = 555.9951601941602 g
+Banana = 14.0 Bananas
+Organic Super Smoothie Mix = 7.0 pouches
+Salmon = 438.0 g
+Mahi Mahi = 150.0 g
+Cod = 345.0 g
+Optimal Calorie Count: 14508.875571638753 
