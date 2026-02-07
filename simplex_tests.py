@@ -1,5 +1,7 @@
 import numpy as np
-from simplex import *
+from Simplex import System
+from Objective import Objective
+from Constraint import Constraint
 
 def test_1():
     obj = Objective(coefficients=[3.0, 2.0, 4.0], obj="max")

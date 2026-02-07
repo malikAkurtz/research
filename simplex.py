@@ -18,8 +18,12 @@ class System():
         self.artifical_var_idx  = []
         self.artifical_var_rows = []
         self.obj_flipped        = False
+        
         self.A                  = None
         self.cur_basic_vars     = [None] * self.num_constraints
+        
+        self.optimal_obj_val    = None
+        self.optimal_var_vals   = None
         
     def _verify_objective(self):
         # If the objective is to minimize, we have to transform it
@@ -98,7 +102,7 @@ class System():
             for idx in self.artifical_var_idx:
                 phase_1_obj_row[idx] = 1 # since maximizing negation
                 
-            # 2) Add the new row to the bottom of our system
+            # 2) Add the new row to thex bottom of our system
             self.A = np.append(self.A, np.array([phase_1_obj_row]), axis=0)
                    
             # 3) Clear their corresponding columns
@@ -112,14 +116,14 @@ class System():
                 return
     
     def _phase_2(self):
-        # 1) Add phase 2 objective row to the bottom of A
+        # 1) Add Phase 2 objective row to the bottom of A
         phase_2_obj_coefs     = np.append(self.objective.coefficients, np.zeros(self.num_slack_vars + self.num_artifical_vars))
         phase_2_obj_row       = np.append(phase_2_obj_coefs, 0.0)
         self.A = np.append(self.A, np.array([phase_2_obj_row]), axis=0)
-        # Negate the phase 2 objective row since we are maximizing
+        # Negate the Phase 2 objective row since we are maximizing
         self.A[-1] = -1 * self.A[-1]
         
-        # 2) Get rid of artifical variable columns and phase 1 objective row
+        # 2) Get rid of artifical variable columns and Phase 1 objective row
         if self.num_artifical_vars > 0:
             # Get rid of artifical columns
             for idx in sorted(self.artifical_var_idx, reverse=True):
@@ -157,11 +161,7 @@ class System():
                 if row_value != 0:
                     self.A[i] = self.A[i] + (-row_value*pivot_row)
         
-    def _simplex(self, obj_row_idx: int):
-        # assuming basic var cols are after non-basic
-        n = self.num_vars
-        m = self.num_constraints
-        
+    def _simplex(self, obj_row_idx: int):        
         while True:
             # Find the new basic variable
             most_negative_col_idx = 0
@@ -189,7 +189,7 @@ class System():
 
                 # ratio test
                 possible_vals = []
-                for i in range(m):
+                for i in range(self.num_constraints):
                     if pivot_col[i] > 0:
                         possible_vals.append(rhs_col[i] / pivot_col[i])
                     else:
@@ -217,6 +217,8 @@ class System():
                         row_value = self.A[i][pivot_col_idx]
                         self.A[i] = self.A[i] + (-row_value * pivot_row)
                 
+        # During Phase 1, self.num_vars = num_decision_vars + num_slack_vars + num_artifical_vars
+        # During Phase 2, self.num_vars = num_decision_vars + num_slack_vars
         optimal_vals = np.zeros(self.num_vars, dtype=float)
         
         for row_idx, var_idx in enumerate(self.cur_basic_vars):
@@ -240,14 +242,19 @@ def main():
     
     # 1) Make sure we are maximizing an objective, transform if necessary
     system._verify_objective()
+    print(system.A)
     # 2) Ensure the RHS >= 0
     system._ensure_positve_rhs()
+    print(system.A)
     # 3) Put system in standard form
     system._standardize()
+    print(system.A)
     # 4) Run Phase 1
     system._phase_1()
+    print(system.A)
     # 5) Run Phase 2
     optimal_vals, optimal_z = system._phase_2()
+    print(system.A)
     
     for idx, val in enumerate(optimal_vals):
         if val > 0:
