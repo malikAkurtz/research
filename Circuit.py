@@ -12,9 +12,8 @@ class Circuit:
     Circuit class to build and store relevant data for a circuit
     using the method of nodes.
     """
-    def __init__(self, graph_rep: dict, n_cut: int):
+    def __init__(self, graph_rep: dict):
         self.labels                                           = graph_rep["nodes"] # ["a", "b", "c", etc.]
-        self.n_cut                                            = n_cut
         self.circuit_graph                                    = Circuit._build_master_graph(graph_rep) # collection of edges,vertices
         self.capacitive_sub_graph, self.inductive_sub_graph   = self._build_sub_graphs() # capactive edges,vertices + inductive edges,vertices
         self.active_nodes, self.passive_nodes                 = self._partition_nodes()
@@ -26,9 +25,10 @@ class Circuit:
         self.omega_squared                                    = self._build_omega_squared()
         self.normal_modes_squared, self.normal_vecs_squared   = np.linalg.eig(self.omega_squared)
         self.josephson_junctions                              = graph_rep["josephson_junctions"]
-        self.n_hat, self.H_hat                                = self._quantize()
-        self.energies, self.states                            = self._diagonalize()
-        self.n_hat_energy                                     = self._change_basis()
+        
+        self.n_hat, self.H_hat                                = None, None
+        self.energies, self.states                            = None, None
+        self.n_hat_energy                                     = None
         self.t_vec, self.At_vec, self.P_0, self.P_1, self.P_2 = None, None, None, None, None
         
     @staticmethod
@@ -186,7 +186,7 @@ class Circuit:
         node_flux_dot = self._get_node_flux_dot(node_charge)
         return (node_flux_dot.T @ self.capacitance_matrix @ node_flux_dot) / 2
     
-    def get_potential_energy(self, node_flux):
+    def get_potential_energy(self, node_flux: np.ndarray):
         if self.inv_inductance_matrix.size > 0 and np.any(self.inv_inductance_matrix != 0):
             term_1 = (node_flux.T @ self.inv_inductance_matrix @ node_flux) / 2
         else:
@@ -241,7 +241,7 @@ class Circuit:
         return PHI_0**2 / EJ
     
     # Currently only works for a circuit with a single node and single Josephson Junction
-    def _quantize(self):
+    def _quantize(self, n_cut: int):
         C_sum = self.capacitance_matrix[0][0]
         
         if self.josephson_junctions:
@@ -253,20 +253,21 @@ class Circuit:
         # Define Hilbert space
         # e.g. [-20, -19, ..., 0, ..., 19, 20] for n_cut = 20
         # each n represents n Cooper pairs on the island
-        n_vals = np.array([i for i in range(-self.n_cut, self.n_cut+1)])
+        n_vals = np.array([i for i in range(-n_cut, n_cut+1)])
         dim = len(n_vals)
         n_hat = np.diag(n_vals)
                 
         # Build Hamiltonian Operator
         H = (4 * EC * (n_hat @ n_hat)) - 0.5 * EJ * (np.diag(np.ones(dim-1), 1) + np.diag(np.ones(dim-1), -1))
         
-        return n_hat, H
+        self.n_hat = n_hat
+        self.H_hat = H
     
     def _diagonalize(self):
-        return np.linalg.eigh(self.H_hat)
+        self.energies, self.states = np.linalg.eigh(self.H_hat)
         
     def _change_basis(self):
-        return np.conjugate(self.states).T @ self.n_hat @ self.states
+        self.n_hat_energy = np.conjugate(self.states).T @ self.n_hat @ self.states
     
     def crank_nicolson(self, dim_sub: int, T_drive: float, N_pulses: int, sigma: float, steps_per_period: int):
         # Only grab the dim_sub lowest eigenvalues
@@ -340,7 +341,7 @@ class Circuit:
             # Probability of finding the system in the second excited state (E_2) (leakage) (bad)
             P_2[i]    = np.abs(psi[2])**2
 
-        return t_vec, At_vec, P_0, P_1, P_2
+        self.t_vec, self.At_vec, self.P_0, self.P_1, self.P_2 = t_vec, At_vec, P_0, P_1, P_2
     
     def connectivity(self):
         s = ""
@@ -362,72 +363,74 @@ class Circuit:
     
     def __repr__(self):
         return self.connectivity()
-      
-    def plot_charge_distribution(self):
-        # 1. Define the x-axis (number of Cooper pairs)
-        n_vals = np.arange(-self.n_cut, self.n_cut + 1)
-        
-        # 2. Get the ground state (first column) and first excited state (second column)
-        ground_state = self.states[:, 0]
-        excited_state = self.states[:, 1]
-        
-        # 3. Create the plot
-        plt.figure(figsize=(10, 6))
-        
-        # Plotting Ground State (|0>)
-        plt.plot(n_vals, ground_state, 'o-', label='Ground State |0>', markersize=4)
-        
-        # Plotting First Excited State (|1>)
-        plt.plot(n_vals, excited_state, 's-', label='First Excited State |1>', markersize=4)
-        
-        plt.axvline(0, color='black', linestyle='--', alpha=0.3)
-        plt.xlabel('Number of Cooper Pairs (n)')
-        plt.ylabel('Amplitude')
-        plt.title('Transmon Wavefunctions in Charge Basis')
-        plt.legend()
-        plt.grid(True, alpha=0.3)
-        plt.show()
-    
-    def plot_Josephson_potential(self, min_flux, max_flux):
-        node_phases = np.linspace(min_flux, max_flux, 400)
-        
-        # Josephson potential [J]
-        U = np.array([])
-        
-        # Calculate different values for Josephson potential
-        # depending on node flux
-        for node_phase in node_phases:
-            # Convert phase (dimensionless) to flux (Webers)
-            node_flux = node_phase * PHI_0
-            U = np.append(U, self.get_potential_energy([node_flux]))
-        
-        # Plot Josephson potential
-        plt.plot(node_phases, U / e / 1e-3, 'r', linewidth=3, label='Josephson potential')
+######################################## CIRCUIT CLASS ########################################
 
+def plot_charge_distribution(n_cut: int, states: np.ndarray):
+    # 1. Define the x-axis (number of Cooper pairs)
+    n_vals = np.arange(-n_cut, n_cut + 1)
+    
+    # 2. Get the ground state (first column) and first excited state (second column)
+    ground_state = states[:, 0]
+    excited_state = states[:, 1]
+    
+    # 3. Create the plot
+    plt.figure(figsize=(10, 6))
+    
+    # Plotting Ground State (|0>)
+    plt.plot(n_vals, ground_state, 'o-', label='Ground State |0>', markersize=4)
+    
+    # Plotting First Excited State (|1>)
+    plt.plot(n_vals, excited_state, 's-', label='First Excited State |1>', markersize=4)
+    
+    plt.axvline(0, color='black', linestyle='--', alpha=0.3)
+    plt.xlabel('Number of Cooper Pairs (n)')
+    plt.ylabel('Amplitude')
+    plt.title('Transmon Wavefunctions in Charge Basis')
+    plt.legend()
+    plt.grid(True, alpha=0.3)
+    plt.show()
+
+def plot_potential_energy(circuit: Circuit, min_flux: float, max_flux: float):
+    node_phases = np.linspace(min_flux, max_flux, 400)
+    
+    # Potential energy [J]
+    U = np.array([])
+    
+    # Calculate different values for potential energy
+    # depending on node flux
+    for node_phase in node_phases:
+        # Convert phase (dimensionless) to flux (Webers)
+        node_flux = node_phase * PHI_0
+        U = np.append(U, circuit.get_potential_energy(np.array([node_flux])))
+    
+    # Plot potential energy
+    plt.plot(node_phases, U / e / 1e-3, 'r', linewidth=3, label='Potential Energy')
+
+    if circuit.energies.size > 0:
         # Overlay lowest energy eigenvalues
-        for k in range(6):  # ground, first, second excited, etc.
-            plt.hlines(self.energies[k] / e / 1e-3, xmin=min_flux, xmax=max_flux,
+        for k in range(len(circuit.energies)):  # ground, first, second excited, etc.
+            plt.hlines(circuit.energies[k] / e / 1e-3, xmin=min_flux, xmax=max_flux,
                     colors='k', linewidth=2, linestyles='-', label="Energy Level" if k == 0 else None)
-        
-        # Labels and formatting
-        plt.xlabel(r'Phase $\phi$', fontsize=15)
-        plt.ylabel('Energy (meV)', fontsize=15)
-        plt.axis([min_flux, max_flux, None, None]) 
-        plt.xticks([-np.pi, -np.pi/2, 0, np.pi/2, np.pi], 
-                [r'$-\pi$', r'$-\pi/2$', '0', r'$\pi/2$', r'$\pi$'])
-        plt.grid(alpha=0.3)
-        plt.show()
     
-    def plot_pulse_sequence(self, t_vec, At_vec, num_steps=1000):
-        plt.figure(figsize=(8, 4))
-        plt.plot(t_vec[:num_steps] * 1e9, At_vec[:num_steps] / e / 1e-3, linewidth=2)
-        plt.xlabel('Time (ns)')
-        plt.ylabel('Pulse (meV)')
-        plt.title('SFQ Pulse shape')
-        plt.grid(True)
-        plt.show()
-    
-def plot_rabi_oscillations(t_vec, T_drive, P_0, P_1, P_2):
+    # Labels and formatting
+    plt.xlabel(r'Phase $\phi$', fontsize=15)
+    plt.ylabel('Energy (meV)', fontsize=15)
+    plt.axis([min_flux, max_flux, None, None]) 
+    plt.xticks([-np.pi, -np.pi/2, 0, np.pi/2, np.pi], 
+            [r'$-\pi$', r'$-\pi/2$', '0', r'$\pi/2$', r'$\pi$'])
+    plt.grid(alpha=0.3)
+    plt.show()
+
+def plot_pulse_sequence(t_vec: np.ndarray, At_vec: np.ndarray, num_steps=1000):
+    plt.figure(figsize=(8, 4))
+    plt.plot(t_vec[:num_steps] * 1e9, At_vec[:num_steps] / e / 1e-3, linewidth=2)
+    plt.xlabel('Time (ns)')
+    plt.ylabel('Pulse (meV)')
+    plt.title('SFQ Pulse shape')
+    plt.grid(True)
+    plt.show()
+
+def plot_rabi_oscillations(T_drive: float, t_vec: np.ndarray, P_0: np.ndarray, P_1: np.ndarray, P_2: np.ndarray):
     plt.figure(figsize=(8, 5))
     plt.plot(t_vec * 1e9, P_0, label='P0', linewidth=2)
     plt.plot(t_vec * 1e9, P_1, label='P1', linewidth=2)
@@ -438,4 +441,3 @@ def plot_rabi_oscillations(t_vec, T_drive, P_0, P_1, P_2):
     plt.legend(loc='best')
     plt.grid(True)
     plt.show()
-######################################## CIRCUIT CLASS ########################################

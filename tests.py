@@ -1,4 +1,4 @@
-from main import Circuit, PHI_0
+from non_linear import Circuit, PHI_0
 import numpy as np
 from scipy.constants import e, hbar
 

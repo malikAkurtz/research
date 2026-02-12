@@ -1,5 +1,5 @@
 import numpy as np
-from Circuit import Circuit
+from Circuit import Circuit, plot_charge_distribution, plot_potential_energy, plot_pulse_sequence, plot_rabi_oscillations
 from scipy.constants import h, e
     
 def main():
@@ -40,7 +40,7 @@ def main():
         'external_flux': {}
     }
     
-    circuit = Circuit(graph_rep=graph_rep, n_cut=n_cut)
+    circuit = Circuit(graph_rep=graph_rep)
     
     for node in circuit.active_nodes:
         print(f"  Active node: {node.label}")
@@ -49,8 +49,14 @@ def main():
     
     print(circuit)
     print(f"Capacitance Matrix: {circuit.capacitance_matrix}")
-    C_sum = circuit.capacitance_matrix[0][0]
     print(f"Inverse Inductance Matrix: {circuit.inv_inductance_matrix}")
+    
+    # Get charge operator and Hamiltonian operator in the charge basis
+    circuit._quantize(n_cut=n_cut)
+    # Diagonalize Hamiltonian operator to get energies and states
+    circuit._diagonalize()
+    # Crate new charge operator in energy basis
+    circuit._change_basis()
     
     print(f"# Energy Levels: {circuit.states.shape[0]}")
     
@@ -75,13 +81,13 @@ def main():
         steps_per_period=steps_per_period
         )  
         
-    circuit.plot_charge_distribution()
+    plot_charge_distribution(n_cut=n_cut, states=circuit.states)
     
-    circuit.plot_Josephson_potential(min_flux=-np.pi, max_flux=np.pi)
+    plot_potential_energy(circuit=circuit, min_flux=-np.pi, max_flux=np.pi)
     
-    # plot_pulse_sequence(t_vec=t_vec, At_vec=At_vec)
+    plot_pulse_sequence(t_vec=circuit.t_vec, At_vec=circuit.At_vec)
     
-    # plot_rabi_oscillations(t_vec, T_drive, P_0, P_1, P_2)
+    plot_rabi_oscillations(T_drive=T_drive, t_vec=circuit.t_vec, P_0=circuit.P_0, P_1=circuit.P_1, P_2=circuit.P_2)
 
     
     

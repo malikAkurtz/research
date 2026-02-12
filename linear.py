@@ -1,5 +1,5 @@
 import numpy as np
-from Circuit import Circuit
+from Circuit import Circuit, plot_potential_energy
 from scipy.constants import h, e
     
 def main():
@@ -8,10 +8,6 @@ def main():
     
     # Define energies
     fC    = 250e6  # Charging energy frequency EC/h [Hz]
-    
-    # 4. Simulation Parameters
-    n_cut = 20
-    delta_f = -1e6    
     
     ################################# HYPER-PARAMETERS #################################
     
@@ -29,7 +25,7 @@ def main():
         'external_flux': {}
     }
     
-    circuit = Circuit(graph_rep=graph_rep, n_cut=n_cut)
+    circuit = Circuit(graph_rep=graph_rep)
     
     for node in circuit.active_nodes:
         print(f"  Active node: {node.label}")
@@ -38,22 +34,15 @@ def main():
     
     print(circuit)
     print(f"Capacitance Matrix: {circuit.capacitance_matrix}")
-    C_sum = circuit.capacitance_matrix[0][0]
-    EC = e**2 / (2*C_sum)
     print(f"Inverse Inductance Matrix: {circuit.inv_inductance_matrix}")
     
-    print(f"# Energy Levels: {circuit.states.shape[0]}")
+    omega = np.sqrt(1/L*C_sum)
     
-    f0, f1, f2 = circuit.energies[0:3] / h / 1e9 # Convert to GHz
-    alpha = (f2 - f1) - (f1 - f0)
-    
-    print("Circuit parameters:")
-    print(f"  EC/h  = {(EC / h):.3f} GHz")
-    print(f"  Anharmonicity = {alpha:.3f} GHz")  
-         
-    circuit.plot_charge_distribution()
-    
-    circuit.plot_Josephson_potential(min_flux=-np.pi, max_flux=np.pi)
+    # Calculate the first 100 energies
+    circuit.energies = np.array([h*(omega)*(n + 0.5) for n in range(10)])
+    print(circuit.energies)
+        
+    plot_potential_energy(circuit=circuit, min_flux=-100000, max_flux=100000)
     
 
     
