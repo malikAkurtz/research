@@ -1,6 +1,6 @@
 import numpy as np
 np.set_printoptions(precision=8, linewidth=120, suppress=True)
-from Circuit import Circuit, plot_charge_distribution, plot_potential_energy, plot_pulse_sequence, plot_rabi_oscillations
+from Circuit import *
 from scipy.constants import h, e
     
 def main():
@@ -11,7 +11,6 @@ def main():
     
     # Define energies
     fC    = 250e6  # Charging energy frequency EC/h [Hz]
-    # EJ 
     EJ_EC = 50     # EJ/EC ratio (typical transmon)
     
     # Crank-Nicolson Parameters
@@ -91,23 +90,51 @@ def main():
     # Drive frequency and SFQ pulse parameters
     f01_Hz   = (f1 - f0) * 1e9       # |0> --> |1|  [Hz]
     f_drive  = f01_Hz + delta_f      # drive repetition rate resonant with 0-1 + detuning
-    T_drive  = 1 / f_drive           # pulse repetition period [s]
+    T_drive  = 1 / f_drive           # pulse repetition period [s], i.e. 1 SFQ pulse per T_drive seconds
     
-    circuit.crank_nicolson(
-        dim_sub=dim_sub, 
-        T_drive=T_drive, 
-        N_pulses=N_pulses, 
-        sigma=sigma, 
-        steps_per_period=steps_per_period
-        )  
+    # circuit.crank_nicolson(
+    #     dim_sub=dim_sub, 
+    #     T_drive=T_drive, 
+    #     N_pulses=N_pulses, 
+    #     sigma=sigma, 
+    #     steps_per_period=steps_per_period
+    #     )  
+    
+    # Sweep over different amount of detuning and analyze behavior
+    min_detuning = -30e6
+    max_detuning = 30e6
+    
+    # Different values of detuning
+    deltas = np.linspace(min_detuning, max_detuning, 21)
+    # To store the maximum P(Measure |0>)
+    max_P1s = []
+    
+    for detuning in deltas:
+        f_drive  = f01_Hz + detuning      # drive repetition rate resonant with 0-1 + detuning
+        T_drive  = 1 / f_drive           # pulse repetition period [s], i.e. 1 SFQ pulse per T_drive seconds
         
-    plot_charge_distribution(n_cut=n_cut, states=circuit.states)
+        circuit.crank_nicolson(
+            dim_sub=dim_sub, 
+            T_drive=T_drive,
+            N_pulses=N_pulses, 
+            sigma=sigma, 
+            steps_per_period=steps_per_period
+            )
+                
+        max_P1s.append(max(circuit.P_1))
+         
+         
+    plt.figure(figsize=(8, 4))
+    plt.plot(deltas / 1e6, max_P1s, linewidth=2)
+    plt.xlabel('Detuning [MHz]')
+    plt.ylabel('P(Measure|1>)')
+    plt.title('P1 vs Detuning')
+    plt.grid(True)
+    plt.show()
     
-    plot_potential_energy(circuit=circuit, min_flux=-np.pi, max_flux=np.pi)
+        
     
-    plot_pulse_sequence(t_vec=circuit.t_vec, At_vec=circuit.At_vec)
-    
-    plot_rabi_oscillations(T_drive=T_drive, t_vec=circuit.t_vec, P_0=circuit.P_0, P_1=circuit.P_1, P_2=circuit.P_2)
+    # plot_all(circuit=circuit, n_cut=n_cut, min_flux=-np.pi, max_flux=np.pi, num_phases=1000, T_drive=T_drive)
 
     
     

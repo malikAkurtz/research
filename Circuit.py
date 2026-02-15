@@ -370,22 +370,24 @@ def plot_charge_distribution(n_cut: int, states: np.ndarray):
     # 1. Define the x-axis (number of Cooper pairs)
     n_vals = np.arange(-n_cut, n_cut + 1)
     
-    # 2. Get the ground state (first column) and first excited state (second column)
+    # 2. Get the ground state (first column), first excited state (second column), and second excited state (third column)
     ground_state = states[:, 0]
-    excited_state = states[:, 1]
+    first_excited_state = states[:, 1]
+    second_excited_state = states[:, 2]
     
     # 3. Create the plot
     plt.figure(figsize=(10, 6))
     
     # Plotting Ground State (|0>)
-    plt.plot(n_vals, ground_state, 'o-', label='Ground State |0>', markersize=4)
-    
+    plt.plot(n_vals, np.abs(ground_state)**2, 'o-', label='Ground State |0>', markersize=4)
     # Plotting First Excited State (|1>)
-    plt.plot(n_vals, excited_state, 's-', label='First Excited State |1>', markersize=4)
+    plt.plot(n_vals, np.abs(first_excited_state)**2, 's-', label='First Excited State |1>', markersize=4)
+    # Plotting Second Excited State (|2>)
+    plt.plot(n_vals, np.abs(second_excited_state)**2, '-', label='Second Excited State |2>', markersize=4)
     
     plt.axvline(0, color='black', linestyle='--', alpha=0.3)
     plt.xlabel('Number of Cooper Pairs (n)')
-    plt.ylabel('Amplitude')
+    plt.ylabel('Probability Amplitude')
     plt.title('Transmon Wavefunctions in Charge Basis')
     plt.legend()
     plt.grid(True, alpha=0.3)
@@ -396,19 +398,47 @@ def plot_phase_distribution(n_cut: int, states: np.ndarray, min_flux: float, max
     # after tranpose, rows are the eigenvectors
     states_T = states.T
     # states are in charge basis, we want them in phase basis
-    states_phase_basis = np.zeros((num_phases, len(states_T)))
+    # (columns are the state vectors)
+    states_phase_basis = np.zeros((num_phases, len(states_T)), dtype=complex)
     
     # Define the phases we want to sweep over
     phases = np.linspace(min_flux, max_flux, num_phases)
     
-    # Perform DFT for each phase
-    for phase in phases:
-        phase_state = np.zeros()
-        for eigenstate in states_T:
+    # For every eigenvstate in the charge basis
+    for k in range(len(states_T)):
+        charge_state = states_T[k]
+        for j in range(len(phases)):
+            phi = phases[j]
             # Discrete Fourier Transform
+            amplitude = 0
+            for n in range(2*n_cut + 1):
+                amplitude += np.exp(1j*(n - n_cut)*phi)*charge_state[n]
+            # Add its amplitude to the new collection of eigenstates in the phase basis
+            states_phase_basis[j][k] = amplitude
     
+    # 2. Get the ground state (first column), first excited state (second column), and second excited state (third column)
+    ground_state = states_phase_basis[:, 0]
+    first_excited_state = states_phase_basis[:, 1]
+    second_excited_state = states_phase_basis[:, 2]
     
+    # 3. Create the plot
+    plt.figure(figsize=(10, 6))
+    
+    # Plotting Ground State (|0>)
+    plt.plot(phases, np.abs(ground_state)**2, 'o-', label='Ground State |0>', markersize=4)
+    # Plotting First Excited State (|1>)
+    plt.plot(phases, np.abs(first_excited_state)**2, 's-', label='First Excited State |1>', markersize=4)
+    # Plotting Second Excited State (|2>)
+    plt.plot(phases, np.abs(second_excited_state)**2, '-', label='Second Excited State |2>', markersize=4)
 
+    plt.axvline(0, color='black', linestyle='--', alpha=0.3)
+    plt.xlabel('Phase')
+    plt.ylabel('Probability Amplitude')
+    plt.title('Transmon Wavefunctions in Phase Basis')
+    plt.legend()
+    plt.grid(True, alpha=0.3)
+    plt.show()
+    
 def plot_potential_energy(circuit: Circuit, min_flux: float, max_flux: float):
     node_phases = np.linspace(min_flux, max_flux, 400)
     
@@ -435,7 +465,7 @@ def plot_potential_energy(circuit: Circuit, min_flux: float, max_flux: float):
     plt.xlabel(r'Phase $\phi$', fontsize=15)
     plt.ylabel('Energy (meV)', fontsize=15)
     plt.axis([min_flux, max_flux, None, None]) 
-    plt.xticks([-np.pi, -np.pi/2, 0, np.pi/2, np.pi], 
+    plt.xticks([-min_flux, -min_flux/2, 0, max_flux/2, max_flux], 
             [r'$-\pi$', r'$-\pi/2$', '0', r'$\pi/2$', r'$\pi$'])
     plt.grid(alpha=0.3)
     plt.show()
@@ -459,4 +489,83 @@ def plot_rabi_oscillations(T_drive: float, t_vec: np.ndarray, P_0: np.ndarray, P
     plt.title(f'SFQ-driven Rabi dynamics: f_drive = {(1/T_drive)/1e9:.3f} GHz')
     plt.legend(loc='best')
     plt.grid(True)
+    plt.show()
+    
+def plot_all(circuit, n_cut, min_flux, max_flux, num_phases, T_drive):
+    fig, axes = plt.subplots(2, 3, figsize=(20, 10))
+    
+    # ---- (0,0) Charge Distribution ----
+    n_vals = np.arange(-n_cut, n_cut + 1)
+    axes[0,0].plot(n_vals, np.abs(circuit.states[:, 0])**2, 'o-', label='|0>', markersize=4)
+    axes[0,0].plot(n_vals, np.abs(circuit.states[:, 1])**2, 's-', label='|1>', markersize=4)
+    axes[0,0].plot(n_vals, np.abs(circuit.states[:, 2])**2, '-', label='|2>', markersize=4)
+    axes[0,0].axvline(0, color='black', linestyle='--', alpha=0.3)
+    axes[0,0].set_xlabel('Number of Cooper Pairs (n)')
+    axes[0,0].set_ylabel('Probability Density')
+    axes[0,0].set_title('Wavefunctions in Charge Basis')
+    axes[0,0].legend()
+    axes[0,0].grid(True, alpha=0.3)
+    
+    # ---- (0,1) Phase Distribution ----
+    states_T = circuit.states.T
+    states_phase_basis = np.zeros((num_phases, states_T.shape[0]), dtype=complex)
+    phases = np.linspace(min_flux, max_flux, num_phases)
+    for k in range(len(states_T)):
+        charge_state = states_T[k]
+        for j in range(len(phases)):
+            phi = phases[j]
+            amplitude = 0
+            for n in range(2*n_cut + 1):
+                amplitude += np.exp(1j*(n - n_cut)*phi)*charge_state[n]
+            states_phase_basis[j][k] = amplitude
+    axes[0,1].plot(phases, np.abs(states_phase_basis[:, 0])**2, 'o-', label='|0>', markersize=4)
+    axes[0,1].plot(phases, np.abs(states_phase_basis[:, 1])**2, 's-', label='|1>', markersize=4)
+    axes[0,1].plot(phases, np.abs(states_phase_basis[:, 2])**2, '-', label='|2>', markersize=4)
+    axes[0,1].axvline(0, color='black', linestyle='--', alpha=0.3)
+    axes[0,1].set_xlabel('Phase')
+    axes[0,1].set_ylabel('Probability Density')
+    axes[0,1].set_xticks([-np.pi, -np.pi/2, 0, np.pi/2, np.pi])
+    axes[0,1].set_xticklabels([r'$-\pi$', r'$-\pi/2$', '0', r'$\pi/2$', r'$\pi$'])
+    axes[0,1].set_title('Wavefunctions in Phase Basis')
+    axes[0,1].legend()
+    axes[0,1].grid(True, alpha=0.3)
+    
+    # ---- (0,2) Potential Energy ----
+    node_phases = np.linspace(min_flux, max_flux, 400)
+    U = np.array([circuit.get_potential_energy(np.array([phi * PHI_0])) for phi in node_phases])
+    axes[0,2].plot(node_phases, U / e / 1e-3, 'r', linewidth=3, label='Potential Energy')
+    if circuit.energies is not None:
+        for k in range(6):
+            axes[0,2].hlines(circuit.energies[k] / e / 1e-3, xmin=min_flux, xmax=max_flux,
+                    colors='k', linewidth=2, linestyles='-', label="Energy Level" if k == 0 else None)
+    axes[0,2].set_xlabel(r'Phase $\phi$')
+    axes[0,2].set_ylabel('Energy (meV)')
+    axes[0,2].set_xticks([-np.pi, -np.pi/2, 0, np.pi/2, np.pi])
+    axes[0,2].set_xticklabels([r'$-\pi$', r'$-\pi/2$', '0', r'$\pi/2$', r'$\pi$'])
+    axes[0,2].set_title('Potential Energy')
+    axes[0,2].legend()
+    axes[0,2].grid(alpha=0.3)
+    
+    # ---- (1,0) Pulse Sequence ----
+    num_steps = 1000
+    axes[1,0].plot(circuit.t_vec[:num_steps] * 1e9, circuit.At_vec[:num_steps] / e / 1e-3, linewidth=2)
+    axes[1,0].set_xlabel('Time (ns)')
+    axes[1,0].set_ylabel('Pulse (meV)')
+    axes[1,0].set_title('SFQ Pulse Shape')
+    axes[1,0].grid(True)
+    
+    # ---- (1,1) Rabi Oscillations ----
+    axes[1,1].plot(circuit.t_vec * 1e9, circuit.P_0, label='P0', linewidth=2)
+    axes[1,1].plot(circuit.t_vec * 1e9, circuit.P_1, label='P1', linewidth=2)
+    axes[1,1].plot(circuit.t_vec * 1e9, circuit.P_2, label='P2 (leakage)', linewidth=2)
+    axes[1,1].set_xlabel('Time (ns)')
+    axes[1,1].set_ylabel('Population')
+    axes[1,1].set_title(f'SFQ-driven Rabi: f_drive = {(1/T_drive)/1e9:.3f} GHz')
+    axes[1,1].legend(loc='best')
+    axes[1,1].grid(True)
+    
+    # ---- (1,2) Empty ----
+    axes[1,2].axis('off')
+    
+    plt.tight_layout()
     plt.show()
