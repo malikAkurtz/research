@@ -262,7 +262,7 @@ class Circuit:
         
         self.n_hat = n_hat
         self.H_hat = H
-    
+            
     def _diagonalize(self):
         self.energies, self.states = np.linalg.eigh(self.H_hat)
         
@@ -271,9 +271,10 @@ class Circuit:
     
     def crank_nicolson(self, dim_sub: int, T_drive: float, N_pulses: int, sigma: float, steps_per_period: int):
         # Only grab the dim_sub lowest eigenvalues
+        # e.g. E_0, E_1, E_2, ... E_(dim_sub-1)
         truncated_energies = self.energies[:dim_sub]
         
-        # Truncated independent Hamiltonian
+        # Truncated Hamiltonian
         H_0 = np.diag(truncated_energies)
         
         # Truncated charge operator in energy basis
@@ -297,7 +298,7 @@ class Circuit:
         # Precompute pulse centers
         pulse_centers = np.array([i for i in range(N_pulses)]) * T_drive;
         
-        # Initial state: ground state |0> in eigenbasis (energy basis)
+        # Initial state: ground state |0> in energy basis
         psi = np.zeros(dim_sub);
         psi[0] = 1.0;
         
@@ -389,6 +390,24 @@ def plot_charge_distribution(n_cut: int, states: np.ndarray):
     plt.legend()
     plt.grid(True, alpha=0.3)
     plt.show()
+    
+def plot_phase_distribution(n_cut: int, states: np.ndarray, min_flux: float, max_flux: float, num_phases: int):
+    # states is a 2D array where columns are the eigenvectors, just transpose to make it easier
+    # after tranpose, rows are the eigenvectors
+    states_T = states.T
+    # states are in charge basis, we want them in phase basis
+    states_phase_basis = np.zeros((num_phases, len(states_T)))
+    
+    # Define the phases we want to sweep over
+    phases = np.linspace(min_flux, max_flux, num_phases)
+    
+    # Perform DFT for each phase
+    for phase in phases:
+        phase_state = np.zeros()
+        for eigenstate in states_T:
+            # Discrete Fourier Transform
+    
+    
 
 def plot_potential_energy(circuit: Circuit, min_flux: float, max_flux: float):
     node_phases = np.linspace(min_flux, max_flux, 400)
@@ -408,7 +427,7 @@ def plot_potential_energy(circuit: Circuit, min_flux: float, max_flux: float):
 
     if circuit.energies.size > 0:
         # Overlay lowest energy eigenvalues
-        for k in range(len(circuit.energies)):  # ground, first, second excited, etc.
+        for k in range(6):  # ground, first, second excited, etc.
             plt.hlines(circuit.energies[k] / e / 1e-3, xmin=min_flux, xmax=max_flux,
                     colors='k', linewidth=2, linestyles='-', label="Energy Level" if k == 0 else None)
     
