@@ -7,7 +7,7 @@ class Node:
         # e.g. "a", "b", etc.
         self.label = label
         # e.g [capacitor1, inductor1, JJ1, ...]
-        self.branches = branches if branches != None else []
+        self.branches = branches if branches is not None else []
 
     def _get_degree(self):
         # number of connected capacitive branches
@@ -17,9 +17,9 @@ class Node:
         
         # NOTE: a JosephsonJunction is made up of a Capacitive branch and and Inductive branch
         for branch in self.branches:
-            if type(branch) in [Capacitor, JosephsonJunction]:
+            if isinstance(branch, (Capacitor, JosephsonJunction)):
                 capacitive_degree += 1
-            if type(branch) in [Inductor, JosephsonJunction]:
+            if isinstance(branch, (Inductor, JosephsonJunction)):
                 inductive_degree += 1
                 
         return capacitive_degree, inductive_degree    
@@ -28,7 +28,7 @@ class Node:
 ######################################## BRANCH CLASS ########################################
 class Branch:
     def __init__(self, nodes: Optional[list[Node]] = None):
-        self.nodes = nodes if nodes != None else []
+        self.nodes = nodes if nodes is not None else []
 
 class Capacitor(Branch):
     def __init__(self, value: float, nodes: Optional[list[Node]] = None):
