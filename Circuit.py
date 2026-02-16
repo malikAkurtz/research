@@ -284,7 +284,13 @@ class Circuit:
             steps_per_period=steps_per_period
             )  
         
-        peaks, _ = find_peaks(self.P_1, height=0.9, distance=10000)
+        window = 1000
+        P1_smooth = np.convolve(self.P_1, np.ones(window)/window, mode='same')
+        peaks, _ = find_peaks(P1_smooth, distance=10000)
+        
+        print(f"  Peaks found: {len(peaks)}")
+        for i, p in enumerate(peaks[:5]):
+            print(f"  Peak {i}: index={p}, t={self.t_vec[p]*1e9:.2f} ns, P1={self.P_1[p]:.4f}")
         
         if len(peaks) >= 2:
             self.rabi_period = self.t_vec[peaks[1]] - self.t_vec[peaks[0]]

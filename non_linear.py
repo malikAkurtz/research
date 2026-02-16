@@ -18,7 +18,7 @@ def main():
     n_cut             = 20
     dim_sub           = 6
     detuning          = OPTIMAL_DETUNING
-    N_pulses          = 1000
+    N_pulses          = 2000
     amplitude_scale   = OPTIMAL_AMPLITUDE_SCALE
     sigma             = OPTIMAL_SIGMA
     steps_per_period  = 200
@@ -93,9 +93,10 @@ def main():
     
     rabi_period = circuit.rabi_period
     
-    print(f"Rabi Period: {rabi_period * 1e9:.2f} ns")
+    plot_all(circuit=circuit, n_cut=n_cut, min_flux=-np.pi, max_flux=np.pi, num_phases=1000, detuning=detuning)
+
     
-    # plot_all(circuit=circuit, n_cut=n_cut, min_flux=-np.pi, max_flux=np.pi, num_phases=1000, detuning=detuning)
+    print(f"Rabi Period: {rabi_period * 1e9:.2f} ns")
     
     # dimension of subspace of interest (single qubit)
     d=2
@@ -109,6 +110,12 @@ def main():
         steps_per_period=steps_per_period)
     
     fidelity = circuit._calculate_fidelity(d=d)
+    
+    print("Actual Unitary Operator: ")
+    print(circuit.U)
+    
+    print("Top-Left d x d of self.U: ")
+    print(circuit.U[:2, :2])
     
     print(f"Gate Fidelity: {fidelity}")
 
