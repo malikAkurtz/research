@@ -1,7 +1,8 @@
 import numpy as np
 import matplotlib.pyplot as plt
 from scipy.constants import h, hbar, e
-
+from typing import Optional
+from scipy.signal import find_peaks
 from Elements import Node, Capacitor, Inductor, JosephsonJunction, Graph
 
 PHI_0 = hbar / (2 * e)
@@ -30,6 +31,9 @@ class Circuit:
         self.energies, self.states                            = None, None
         self.n_hat_energy                                     = None
         self.t_vec, self.At_vec, self.P_0, self.P_1, self.P_2 = None, None, None, None, None
+        self.rabi_period                                      = None
+        self.fidelity                                         = None
+        self.U                                                = None
         
     @staticmethod
     def _build_master_graph(graph_rep: dict) -> Graph:
@@ -268,8 +272,27 @@ class Circuit:
         
     def _change_basis(self):
         self.n_hat_energy = np.conjugate(self.states).T @ self.n_hat @ self.states
-    
-    def crank_nicolson(self, dim_sub: int, T_drive: float, N_pulses: int, sigma: float, steps_per_period: int):
+        
+    def _calculate_rabi_period(self, dim_sub: int, detuning: float, N_pulses: int, amplitude_scale: float, sigma: float, steps_per_period: int):
+        self.crank_nicolson(
+            dim_sub=dim_sub, 
+            init_state=0,
+            detuning=detuning, 
+            N_pulses=N_pulses, 
+            amplitude_scale=amplitude_scale,
+            sigma=sigma, 
+            steps_per_period=steps_per_period
+            )  
+        
+        peaks, _ = find_peaks(self.P_1, height=0.9, distance=10000)
+        
+        if len(peaks) >= 2:
+            self.rabi_period = self.t_vec[peaks[1]] - self.t_vec[peaks[0]]
+            return self.rabi_period
+        else:
+            return None
+        
+    def crank_nicolson(self, dim_sub: int, init_state: int, detuning: float, N_pulses: int, amplitude_scale: float, sigma: float, steps_per_period: int):
         # Only grab the dim_sub lowest eigenvalues
         # e.g. E_0, E_1, E_2, ... E_(dim_sub-1)
         truncated_energies = self.energies[:dim_sub]
@@ -279,6 +302,12 @@ class Circuit:
         
         # Truncated charge operator in energy basis
         n_op = self.n_hat_energy[:dim_sub, :dim_sub]
+        
+        # Drive frequency as a function of detuning
+        f0, f1   = self.energies[0:2] / h / 1e9     # [Ghz]
+        f01_Hz   = (f1 - f0) * 1e9                  # |0> --> |1|  [Hz]
+        f_drive  = f01_Hz + detuning                # drive repetition rate resonant with 0-1 + detuning
+        T_drive  = 1 / f_drive                      # pulse repetition period [s], i.e. 1 SFQ pulse per T_drive seconds
         
         # Total simulation time (continuous)
         T = N_pulses * T_drive
@@ -293,14 +322,14 @@ class Circuit:
         t_vec = np.array([i for i in range(N_t)]).T * dt
         
         # Pulse amplitude in Joules 
-        A_0 = 0.01 * (truncated_energies[1]-truncated_energies[0])
+        A_0 = amplitude_scale * (truncated_energies[1]-truncated_energies[0])
         
         # Precompute pulse centers
         pulse_centers = np.array([i for i in range(N_pulses)]) * T_drive;
         
         # Initial state: ground state |0> in energy basis
         psi = np.zeros(dim_sub);
-        psi[0] = 1.0;
+        psi[init_state] = 1.0;
         
         # Pre-allocate arrays for results
         At_vec = np.zeros(N_t)
@@ -343,6 +372,39 @@ class Circuit:
             P_2[i]    = np.abs(psi[2])**2
 
         self.t_vec, self.At_vec, self.P_0, self.P_1, self.P_2 = t_vec, At_vec, P_0, P_1, P_2
+        
+        return psi
+    
+    def _build_unitary(self, dim_sub: int, d: int, detuning: float, amplitude_scale: float, sigma: float, steps_per_period: int):        
+        self.U = []
+        
+        t_pi = self.rabi_period / 2         # [s]
+        
+        f0, f1   = self.energies[0:2] / h / 1e9     # [Ghz]
+        f01_Hz   = (f1 - f0) * 1e9                  # |0> --> |1|  [Hz]
+        f_drive  = f01_Hz + detuning                # drive repetition rate resonant with 0-1 + detuning
+        T_drive  = 1 / f_drive                      # pulse repetition period [s], i.e. 1 SFQ pulse per T_drive seconds
+        
+        N_pi = round(t_pi / T_drive)
+        
+        for i in range(d):
+            final_state = self.crank_nicolson(
+                dim_sub=dim_sub,
+                init_state=i,
+                detuning=detuning,
+                N_pulses=N_pi,
+                amplitude_scale=amplitude_scale,
+                sigma=sigma,
+                steps_per_period=steps_per_period
+            )
+            
+            # Appending eigenstates as rows, so will need to tranpose
+            self.U.append(final_state)
+            
+        self.U = np.array(self.U).T
+    
+    def _calculate_fidelity(self, d: int, U_target: Optional[np.ndarray] = np.array([[0, 1], [1, 0]])):
+        return np.abs(np.trace(U_target.conjugate().T @ self.U[:d, :d])) / d
     
     def connectivity(self):
         s = ""
@@ -491,7 +553,7 @@ def plot_rabi_oscillations(T_drive: float, t_vec: np.ndarray, P_0: np.ndarray, P
     plt.grid(True)
     plt.show()
     
-def plot_all(circuit, n_cut, min_flux, max_flux, num_phases, T_drive):
+def plot_all(circuit, n_cut, min_flux, max_flux, num_phases, detuning):
     fig, axes = plt.subplots(2, 3, figsize=(20, 10))
     
     # ---- (0,0) Charge Distribution ----
@@ -560,7 +622,10 @@ def plot_all(circuit, n_cut, min_flux, max_flux, num_phases, T_drive):
     axes[1,1].plot(circuit.t_vec * 1e9, circuit.P_2, label='P2 (leakage)', linewidth=2)
     axes[1,1].set_xlabel('Time (ns)')
     axes[1,1].set_ylabel('Population')
-    axes[1,1].set_title(f'SFQ-driven Rabi: f_drive = {(1/T_drive)/1e9:.3f} GHz')
+    f0, f1   = circuit.energies[0:2] / h / 1e9     # [Ghz]
+    f01_Hz   = (f1 - f0) * 1e9                  # |0> --> |1|  [Hz]
+    f_drive  = f01_Hz + detuning                # drive repetition rate resonant with 0-1 + detuning
+    axes[1,1].set_title(f'SFQ-driven Rabi: f_drive = {f_drive/1e9:.3f} GHz')
     axes[1,1].legend(loc='best')
     axes[1,1].grid(True)
     

@@ -2,6 +2,7 @@ import numpy as np
 np.set_printoptions(precision=8, linewidth=120, suppress=True)
 from Circuit import *
 from scipy.constants import h, e
+from config import OPTIMAL_DETUNING, OPTIMAL_AMPLITUDE_SCALE, OPTIMAL_SIGMA
     
 def main():
     # Cooper Pair Box / Transmon-like circuit
@@ -16,9 +17,10 @@ def main():
     # Crank-Nicolson Parameters
     n_cut             = 20
     dim_sub           = 6
-    delta_f           = -1e6    
-    N_pulses          = 1000 
-    sigma             = 15e-12 
+    detuning          = OPTIMAL_DETUNING
+    N_pulses          = 1000
+    amplitude_scale   = OPTIMAL_AMPLITUDE_SCALE
+    sigma             = OPTIMAL_SIGMA
     steps_per_period  = 200
     
     ################################# HYPER-PARAMETERS #################################
@@ -87,54 +89,28 @@ def main():
     print(f"  EJ/EC = {(EJ / EC):.1f}")
     print(f"  Anharmonicity = {alpha:.3f} GHz")  
     
-    # Drive frequency and SFQ pulse parameters
-    f01_Hz   = (f1 - f0) * 1e9       # |0> --> |1|  [Hz]
-    f_drive  = f01_Hz + delta_f      # drive repetition rate resonant with 0-1 + detuning
-    T_drive  = 1 / f_drive           # pulse repetition period [s], i.e. 1 SFQ pulse per T_drive seconds
+    circuit._calculate_rabi_period(dim_sub, detuning, N_pulses, amplitude_scale, sigma, steps_per_period)
     
-    # circuit.crank_nicolson(
-    #     dim_sub=dim_sub, 
-    #     T_drive=T_drive, 
-    #     N_pulses=N_pulses, 
-    #     sigma=sigma, 
-    #     steps_per_period=steps_per_period
-    #     )  
+    rabi_period = circuit.rabi_period
     
-    # Sweep over different amount of detuning and analyze behavior
-    min_detuning = -30e6
-    max_detuning = 30e6
+    print(f"Rabi Period: {rabi_period * 1e9:.2f} ns")
     
-    # Different values of detuning
-    deltas = np.linspace(min_detuning, max_detuning, 21)
-    # To store the maximum P(Measure |0>)
-    max_P1s = []
+    # plot_all(circuit=circuit, n_cut=n_cut, min_flux=-np.pi, max_flux=np.pi, num_phases=1000, detuning=detuning)
     
-    for detuning in deltas:
-        f_drive  = f01_Hz + detuning      # drive repetition rate resonant with 0-1 + detuning
-        T_drive  = 1 / f_drive           # pulse repetition period [s], i.e. 1 SFQ pulse per T_drive seconds
-        
-        circuit.crank_nicolson(
-            dim_sub=dim_sub, 
-            T_drive=T_drive,
-            N_pulses=N_pulses, 
-            sigma=sigma, 
-            steps_per_period=steps_per_period
-            )
-                
-        max_P1s.append(max(circuit.P_1))
-         
-         
-    plt.figure(figsize=(8, 4))
-    plt.plot(deltas / 1e6, max_P1s, linewidth=2)
-    plt.xlabel('Detuning [MHz]')
-    plt.ylabel('P(Measure|1>)')
-    plt.title('P1 vs Detuning')
-    plt.grid(True)
-    plt.show()
+    # dimension of subspace of interest (single qubit)
+    d=2
     
-        
+    circuit._build_unitary(
+        dim_sub=dim_sub, 
+        d=d,
+        detuning=detuning, 
+        amplitude_scale=amplitude_scale,
+        sigma=sigma, 
+        steps_per_period=steps_per_period)
     
-    # plot_all(circuit=circuit, n_cut=n_cut, min_flux=-np.pi, max_flux=np.pi, num_phases=1000, T_drive=T_drive)
+    fidelity = circuit._calculate_fidelity(d=d)
+    
+    print(f"Gate Fidelity: {fidelity}")
 
     
     
