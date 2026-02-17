@@ -376,7 +376,7 @@ class Circuit:
     #   Rabi Period Estimation
     # =====================================================================
 
-    def _calculate_rabi_period(self, dim_sub: int, init_state: int, detuning: float, N_pulses: int, amplitude_scale: float, sigma: float, lambda_drag: float, steps_per_period: int):
+    def _calculate_rabi_period(self, dim_sub: int, init_state: int, detuning: float, N_pulses: int, amplitude_scale: float, sigma: float, lambda_drag: float, steps_per_period: int, callback=None):
         """
         Run a long Crank-Nicolson simulation and extract the Rabi period
         from the peaks of the smoothed P_1 population oscillation.
@@ -389,7 +389,8 @@ class Circuit:
             amplitude_scale=amplitude_scale,
             sigma=sigma,
             lambda_drag=lambda_drag,
-            steps_per_period=steps_per_period
+            steps_per_period=steps_per_period,
+            callback=callback
             )
 
         # Smooth P_1 and find peaks to determine Rabi period
@@ -418,8 +419,8 @@ class Circuit:
     # =====================================================================
     #   Crank-Nicolson Time Evolution
     # =====================================================================
-
-    def crank_nicolson(self, dim_sub: int, init_state: int, detuning: float, N_pulses: int, amplitude_scale: float, sigma: float, lambda_drag: float, steps_per_period: int):
+    
+    def crank_nicolson(self, dim_sub: int, init_state: int, detuning: float, N_pulses: int, amplitude_scale: float, sigma: float, lambda_drag: float, steps_per_period: int, callback=None):
         """
         Time-evolve an initial energy eigenstate under an SFQ Gaussian
         pulse train using the Crank-Nicolson (implicit midpoint) method.
@@ -497,7 +498,7 @@ class Circuit:
             At_vec[i]     = At
             At_dot_vec[i] = At_dot
 
-            # Full Hamiltonian at midpoint: H_0 + A(t) * n_op
+            # Full Hamiltonian at midpoint: H_0 + A(t) * n_op + DRAG
             H_mid = H_0 + (At * n_op) + lambda_drag * (At_dot / alpha) * n_12_y
 
             # Crank-Nicolson matrices:
@@ -513,6 +514,9 @@ class Circuit:
             P_0[i]    = np.abs(psi[0])**2  # Ground state population
             P_1[i]    = np.abs(psi[1])**2  # First excited state population
             P_2[i]    = np.abs(psi[2])**2  # Second excited state (leakage)
+
+            if callback is not None:
+                callback(i, self.energies, self.states, t_vec, P_0, P_1, P_2, psi)
 
         self.t_vec, self.At_vec, self.P_0, self.P_1, self.P_2 = t_vec, At_vec, P_0, P_1, P_2
 

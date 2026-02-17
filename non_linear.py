@@ -13,6 +13,7 @@ import numpy as np
 np.set_printoptions(precision=8, linewidth=120, suppress=True)
 from Circuit import Circuit
 from plotting import plot_all
+from LivePlotter import LivePlotter
 from scipy.constants import h, e
 from config import *
 
@@ -138,7 +139,21 @@ def main():
     #   Step 4: Calculate Rabi period & plot energy landscape
     # -------------------------------------------------------------------------
 
-    circuit._calculate_rabi_period(*crank_nic_params)
+    _, f_drive, _ = circuit._drive_params(detuning)
+    
+    if LIVE_VISUALIZATION == True:
+        live_plotter = LivePlotter(circuit=circuit, 
+                                   f_drive=f_drive, 
+                                   dim_sub=dim_sub, 
+                                   n_cut=n_cut,
+                                   min_flux=-np.pi, 
+                                   max_flux=np.pi,
+                                   update_interval=500
+                                   )
+        circuit._calculate_rabi_period(*crank_nic_params, callback=live_plotter.update)
+        live_plotter.finalize()
+    else:
+        circuit._calculate_rabi_period(*crank_nic_params, callback=None)
 
     rabi_period = circuit.rabi_period
 
