@@ -15,10 +15,7 @@ import numpy as np
 from scipy.constants import h, hbar, e
 from typing import Optional
 from scipy.signal import find_peaks
-from Elements import Node, Capacitor, Inductor, JosephsonJunction, Graph
-
-# ---- Fundamental constant ----
-PHI_0 = hbar / (2 * e)  # Reduced flux quantum [Wb]
+from Elements import *
 
 ###############################################################################
 #                                                                             #
@@ -71,74 +68,81 @@ class Circuit:
         Also breaks symmetry by adding a tiny capacitor to ground for
         any node that lacks a capacitive branch.
         """
-        gnd = Node(label="gnd")
+        gnd = Node(label="gnd", branches=None)
 
-        nodes    = {"gnd" : gnd}
+        label_node_dict = {"gnd" : gnd}
         branches = []
 
         # --- Create node objects ---
-        for i in range(len(graph_rep["nodes"])):
-            node_label = graph_rep["nodes"][i]
-            nodes[node_label] = Node(label=node_label)
+        node_labels = graph_rep["nodes"]
+        
+        for label in node_labels:
+            label_node_dict[label] = Node(label=label, branches=None)
 
         # --- Create and assign capacitive branches ---
-        for i in range(len(graph_rep['capacitors'])):
-            entry = graph_rep['capacitors'][i]
-            node1 = nodes[entry[0]]
-            node2 = nodes[entry[1]]
-            value = entry[2]
+        capacitive_branches = graph_rep['capacitors']
+        
+        for entry in capacitive_branches:
+            node1_label = entry[0]
+            node2_label = entry[1]
+            
+            node1 = label_node_dict[node1_label]
+            node2 = label_node_dict[node2_label]
+            
+            capacitance = entry[2]
 
-            capacitor = Capacitor(value=value, nodes=[node1, node2])
+            capacitor = Capacitor(capacitance=capacitance, nodes=(node1, node2))
 
             branches.append(capacitor)
             node1.branches.append(capacitor)
             node2.branches.append(capacitor)
 
         # --- Create and assign inductive branches ---
-        for i in range(len(graph_rep['inductors'])):
-            entry = graph_rep['inductors'][i]
-            node1 = nodes[entry[0]]
-            node2 = nodes[entry[1]]
-            value = entry[2]
+        linear_inductive_branches = graph_rep['inductors']
+        josephson_element_branches = graph_rep['josephson_elements']
+        
+        for entry in linear_inductive_branches:
+            node1 = entry[0]
+            node2 = entry[1]
+            inductance = entry[2]
 
-            inductor = Inductor(value=value, nodes=[node1, node2])
+            inductor = Inductor(inductance=inductance, nodes=(node1, node2))
 
             branches.append(inductor)
             node1.branches.append(inductor)
             node2.branches.append(inductor)
 
-        # --- Create and assign Josephson Junction branches ---
-        for i in range(len(graph_rep["josephson_junctions"])):
-            entry = graph_rep["josephson_junctions"][i]
-            node1 = nodes[entry[0]]
-            node2 = nodes[entry[1]]
-            EJ = entry[2]
-            CJ = entry[3]
+        for entry in josephson_element_branches:
+            node1 = entry[0]
+            node2 = entry[1]
+            josephson_energy = entry[2]
 
-            josephson_junction = JosephsonJunction(EJ=EJ, CJ=CJ, nodes=[node1, node2])
+            josephson_element = JosephsonElement(josephson_energy=josephson_energy, nodes=(node1, node2))
 
-            branches.append(josephson_junction)
-            node1.branches.append(josephson_junction)
-            node2.branches.append(josephson_junction)
+            branches.append(josephson_element)
+            node1.branches.append(josephson_element)
+            node2.branches.append(josephson_element)
 
         # --- Break symmetry ---
         # Add a tiny parasitic capacitor to ground for nodes with no
         # capacitive connection (prevents singular capacitance matrix)
-        for node in nodes.values():
+        for node in label_node_dict.values():
             if node.label == "gnd":
                 continue
             has_capacitive_branch = False
             for branch in node.branches:
-                if isinstance(branch, (Capacitor, JosephsonJunction)):
+                if isinstance(branch, CapacitiveElement):
                     has_capacitive_branch = True
                     break
             if not has_capacitive_branch:
-                capacitor = Capacitor(value=1e-20, nodes=[node, nodes["gnd"]])
+                capacitor = Capacitor(value=1e-20, nodes=(node, label_node_dict["gnd"]))
 
                 branches.append(capacitor)
                 node.branches.append(capacitor)
-                nodes["gnd"].branches.append(capacitor)
+                label_node_dict["gnd"].branches.append(capacitor)
 
+        nodes = list(label_node_dict.values())
+        
         return Graph(nodes, branches)
 
     # =====================================================================
@@ -157,9 +161,9 @@ class Circuit:
         inductive_branches  = []
 
         for branch in branches:
-            if isinstance(branch, (Capacitor, JosephsonJunction)):
+            if isinstance(branch, CapacitiveElement):
                 capacitive_branches.append(branch)
-            if isinstance(branch, (Inductor, JosephsonJunction)):
+            if isinstance(branch, InductiveElement):
                 inductive_branches.append(branch)
 
         return Graph(nodes, capacitive_branches), Graph(nodes, inductive_branches)
@@ -170,7 +174,7 @@ class Circuit:
 
     def _partition_nodes(self):
         """
-        Classify nodes as active (connected to an inductor/JJ) or passive.
+        Classify nodes as active (connected to an inductor/Josephson Element) or passive.
         Assumes symmetry has already been broken in _build_master_graph.
         """
         active_nodes    = []
@@ -216,10 +220,10 @@ class Circuit:
                 k = self.labels.index(node2_label) + 1
 
             # Populate off-diagonal entries
-            if isinstance(branch, (Capacitor, JosephsonJunction)):
+            if isinstance(branch, Capacitor):
                 capacitance_matrix[j][k] += -branch.C
                 capacitance_matrix[k][j] += -branch.C
-            else:
+            elif isinstance(branch, Inductor):
                 inv_inductance_matrix[j][k] += -1 / branch.L
                 inv_inductance_matrix[k][j] += -1 / branch.L
 

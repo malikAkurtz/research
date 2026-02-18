@@ -1,5 +1,10 @@
 from __future__ import annotations
 from typing import Optional
+from scipy.constants import hbar, e
+import numpy as np
+
+# ---- Fundamental constant ----
+PHI_0 = hbar / (2 * e)  # Reduced flux quantum [Wb]
 
 ######################################## NODE CLASS ########################################
 class Node:
@@ -15,36 +20,59 @@ class Node:
         # number of connected inductive branches
         inductive_degree = 0
         
-        # NOTE: a JosephsonJunction is made up of a Capacitive branch and and Inductive branch
         for branch in self.branches:
-            if isinstance(branch, (Capacitor, JosephsonJunction)):
+            if isinstance(branch, CapacitiveElement):
                 capacitive_degree += 1
-            if isinstance(branch, (Inductor, JosephsonJunction)):
+            if isinstance(branch, InductiveElement):
                 inductive_degree += 1
                 
         return capacitive_degree, inductive_degree    
 ######################################## NODE CLASS ######################################## 
 
 ######################################## BRANCH CLASS ########################################
+# A BRANCH IS AN ELEMENT, TWO NODES CAN BE CONNECTED BY MULTIPLE BRANCHES
 class Branch:
-    def __init__(self, nodes: Optional[list[Node]] = None):
-        self.nodes = nodes if nodes is not None else []
+    def __init__(self, nodes: Optional[tuple[Node]] = None):
+        self.nodes = nodes
+        
+    def calculate_energy(self):
+        pass
 
-class Capacitor(Branch):
-    def __init__(self, value: float, nodes: Optional[list[Node]] = None):
+class CapacitiveElement(Branch):
+    def __init__(self, capacitance: float, nodes: Optional[tuple[Node]] = None):
         super().__init__(nodes)
-        self.C = value
+        self.C = capacitance
         
-class Inductor(Branch):
-    def __init__(self, value: float, nodes: Optional[list[Node]] = None):
-        super().__init__(nodes)
-        self.L = value
+    def calculate_energy(self, branch_charge: float, branch_charge_offset: float):
+        return ((branch_charge - branch_charge_offset)**2) / (2 * self.C)
         
-class JosephsonJunction(Branch):
-    def __init__(self, EJ: float, CJ: float, nodes: Optional[list[Node]] = None):
+class Capacitor(CapacitiveElement):
+    def __init__(self, capacitance: float, nodes: Optional[tuple[Node]] = None):
+        super().__init__(capacitance, nodes)
+
+class InductiveElement(Branch):
+    def __init__(self, nodes: Optional[tuple[Node]] = None):
         super().__init__(nodes)
-        self.EJ = EJ
-        self.C = CJ
+        
+    def calculate_energy(self):
+        pass
+    
+class Inductor(InductiveElement):
+    def __init__(self, inductance: float, nodes: Optional[tuple[Node]] = None):
+        super().__init__(nodes)
+        self.L = inductance
+        
+    def calculate_energy(self, branch_flux: float, branch_flux_offset: float):
+        return ((branch_flux - branch_flux_offset)**2) / (2 * self.L)
+        
+class JosephsonElement(InductiveElement):
+    def __init__(self, josephson_energy: float, nodes: Optional[tuple[Node]] = None):
+        super().__init__(nodes)
+        self.EJ = josephson_energy
+        
+    def calculate_energy(self, branch_flux: float, branch_flux_offset: float):
+        return -self.EJ * np.cos( (branch_flux - branch_flux_offset) / PHI_0)
+        
 ######################################## BRANCH CLASS ########################################
 
 ######################################## GRAPH CLASS ########################################

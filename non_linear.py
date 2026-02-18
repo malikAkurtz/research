@@ -64,10 +64,13 @@ def main():
 
     graph_rep = {
         'nodes': ['a'],
-        'capacitors': [('a', 'gnd', CS)],
+        'capacitors': [
+            ('a', 'gnd', CS), # Shunt Capacitor
+            ('a', 'gnd', CJ)  # Josephson Junction Capacitor
+            ],
         'inductors': [],
-        'josephson_junctions': [
-            ('a', 'gnd', EJ, CJ),
+        'josephson_elements': [
+            ('a', 'gnd', EJ), # Josephson Element
         ],
         'external_flux': {}
     }
