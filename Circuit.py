@@ -37,6 +37,7 @@ class Circuit:
         self.labels                                           = graph_rep["nodes"] # ["a", "b", "c", etc.]
         self.circuit_graph                                    = Circuit._build_master_graph(graph_rep) # collection of edges,vertices
         self.capacitive_sub_graph, self.inductive_sub_graph   = self._build_sub_graphs() # capactive edges,vertices + inductive edges,vertices
+        self.josephson_elements                               = [e for e in self.inductive_sub_graph.edges if isinstance(e, JosephsonElement)]
         self.active_nodes, self.passive_nodes                 = self._partition_nodes()
         self.N                                                = len(self.active_nodes)
         self.P                                                = self.N + len(self.passive_nodes) + 1 # for ground
@@ -45,7 +46,6 @@ class Circuit:
         self.offset_dict                                      = graph_rep["external_flux"]
         self.omega_squared                                    = self._build_omega_squared()
         self.normal_modes_squared, self.normal_vecs_squared   = np.linalg.eig(self.omega_squared)
-        self.josephson_junctions                              = graph_rep["josephson_junctions"]
 
         # --- Placeholders (populated by later pipeline stages) ---
         self.n_hat, self.H_hat                                = None, None
@@ -102,8 +102,12 @@ class Circuit:
         josephson_element_branches = graph_rep['josephson_elements']
         
         for entry in linear_inductive_branches:
-            node1 = entry[0]
-            node2 = entry[1]
+            node1_label = entry[0]
+            node2_label = entry[1]
+            
+            node1 = label_node_dict[node1_label]
+            node2 = label_node_dict[node2_label]
+            
             inductance = entry[2]
 
             inductor = Inductor(inductance=inductance, nodes=(node1, node2))
@@ -115,6 +119,10 @@ class Circuit:
         for entry in josephson_element_branches:
             node1 = entry[0]
             node2 = entry[1]
+            
+            node1 = label_node_dict[node1_label]
+            node2 = label_node_dict[node2_label]
+            
             josephson_energy = entry[2]
 
             josephson_element = JosephsonElement(josephson_energy=josephson_energy, nodes=(node1, node2))
@@ -180,8 +188,8 @@ class Circuit:
         active_nodes    = []
         passive_nodes   = []
 
-        for node_label, node in self.circuit_graph.vertices.items():
-            if node_label == "gnd":
+        for node in self.circuit_graph.vertices:
+            if node.label == "gnd":
                 continue
             capacitive_degree, inductive_degree = node._get_degree()
             if (inductive_degree > 0):
@@ -278,20 +286,24 @@ class Circuit:
 
         # --- Nonlinear Josephson term: -EJ * cos(phi) ---
         non_linear_term = 0
-        phi0 = hbar / (2 * e)
 
-        for jj in self.josephson_junctions:
-            node1_label = jj[0]
-            node2_label = jj[1]
-            EJ          = jj[2]
+        for inductive_element in self.inductive_sub_graph.edges:
+            if isinstance(inductive_element, JosephsonElement):
+                node1 = inductive_element.nodes[0]
+                node2 = inductive_element.nodes[1]
+                
+                node1_label = node1.label
+                node2_label = node2.label
+                
+                EJ          = inductive_element.EJ
 
-            node1_flux = node_flux[self.labels.index(node1_label)] if node1_label != "gnd" else 0
-            node2_flux = node_flux[self.labels.index(node2_label)] if node2_label != "gnd" else 0
+                node1_flux = node_flux[self.labels.index(node1_label)] if node1_label != "gnd" else 0
+                node2_flux = node_flux[self.labels.index(node2_label)] if node2_label != "gnd" else 0
 
-            branch_flux = node1_flux - node2_flux
-            phi = branch_flux / phi0
+                branch_flux = node1_flux - node2_flux
+                phase = branch_flux / PHI_0
 
-            non_linear_term += -EJ * np.cos(phi)
+                non_linear_term += -EJ * np.cos(phase)
 
         return linear_term + non_linear_term
 
@@ -317,11 +329,6 @@ class Circuit:
         """H = (1/2) * Q^T * C^{-1} * Q + V(Phi)"""
         return 0.5 * (node_charge.T @ self.inv_capacitance_matrix @ node_charge) + self.get_potential_energy(node_flux)
 
-    @staticmethod
-    def get_LJ(EJ: float):
-        """Josephson inductance: L_J = Phi_0^2 / E_J"""
-        return PHI_0**2 / EJ
-
     # =====================================================================
     #   Quantization (Charge Basis)
     # =====================================================================
@@ -339,8 +346,8 @@ class Circuit:
 
         C_sum = self.capacitance_matrix[0][0]
 
-        if self.josephson_junctions:
-            EJ = self.josephson_junctions[0][2]
+        if len(self.josephson_elements) > 0:
+            EJ = self.josephson_elements[0].EJ
 
         # Cost to add one Cooper pair of charge
         EC = e**2 / (2*C_sum)
@@ -582,8 +589,8 @@ class Circuit:
         """Return a human-readable string of the circuit's node-branch topology."""
         s = ""
         s += "--- Circuit Connectivity -\n"
-        for label, node in self.circuit_graph.vertices.items():
-            s += (f"Node '{label}':\n")
+        for node in self.circuit_graph.vertices:
+            s += (f"Node '{node.label}':\n")
             for branch in node.branches:
                 other_node = [n for n in branch.nodes if n != node]
                 connection = f"connected to {other_node[0].label}" if other_node else "grounded"
@@ -592,7 +599,7 @@ class Circuit:
                 elif isinstance(branch, Inductor):
                     s += (f"  - {"Inductor"} ({branch.L:.2e}) {connection}\n")
                 else:
-                    s += (f"  - {"Josephson Junction"} ({branch.EJ:.2e}) ({branch.C:.2e}) {connection}\n")
+                    s += (f"  - {"Josephson Element"} ({branch.EJ:.2e}) {connection}\n")
         return s
 
     def __repr__(self):
