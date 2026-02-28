@@ -1,6 +1,5 @@
 import numpy as np
 import matplotlib.pyplot as plt
-from Circuit import Circuit, PHI_0, e
 from utils import *
 
 # -------------------------------------------------------------------------
@@ -168,8 +167,8 @@ class LivePlotter:
         self.wave_line.set_data(self.node_phases, probs)
             
         # --- Psi on Bloch Sphere
-        azimuth, inclanation = spherical_coords(state_energy_basis=psi)
-        x, y, z              = spherical_to_rectangular(azimuth=azimuth, inclanation=inclanation)
+        azimuth, inclination = spherical_coords(state_energy_basis=psi)
+        x, y, z              = spherical_to_rectangular(azimuth=azimuth, inclination=inclination)
         
         self.traj_x.append(x)
         self.traj_y.append(y)

@@ -1,32 +1,27 @@
 ###############################################################################
-#                                                                             #
-#   Circuit.py                                                                #
-#                                                                             #
-#   Core module for superconducting circuit simulation using the method of    #
-#   nodes. Builds a circuit graph from a user-defined topology, constructs    #
-#   capacitance & inductance matrices, performs charge-basis quantization,    #
-#   diagonalization, Crank-Nicolson time evolution, and gate fidelity         #
-#   analysis. Also provides plotting utilities for wavefunctions, potential   #
-#   energy landscapes, pulse sequences, and Rabi oscillations.               #
-#                                                                             #
+#
+#   Circuit.py
+#
+#   Builds a circuit graph from a user-defined topology and constructs the
+#   capacitance and inductance matrices. All physics (quantization, time
+#   evolution, fidelity) lives in quantization.py and solver.py.
+#
 ###############################################################################
 
 import numpy as np
-from scipy.constants import h, hbar, e
-from typing import Optional
-from scipy.signal import find_peaks
 from Elements import *
 
 ###############################################################################
-#                                                                             #
-#   Circuit Class                                                             #
-#                                                                             #
+#
+#   Circuit Class
+#
 ###############################################################################
 
 class Circuit:
     """
-    Circuit class to build and store relevant data for a circuit
-    using the method of nodes.
+    Represents a superconducting circuit as a graph.
+    Responsibilities: graph construction, capacitance/inductance matrices,
+    and classical energy functions.
     """
 
     # =====================================================================
@@ -34,30 +29,18 @@ class Circuit:
     # =====================================================================
 
     def __init__(self, graph_rep: dict):
-        self.labels                                           = graph_rep["nodes"] # ["a", "b", "c", etc.]
-        self.circuit_graph                                    = Circuit._build_master_graph(graph_rep) # collection of edges,vertices
-        self.capacitive_sub_graph, self.inductive_sub_graph   = self._build_sub_graphs() # capactive edges,vertices + inductive edges,vertices
+        self.labels                                           = graph_rep["nodes"]
+        self.circuit_graph                                    = Circuit._build_master_graph(graph_rep)
+        self.capacitive_sub_graph, self.inductive_sub_graph   = self._build_sub_graphs()
         self.josephson_elements                               = [e for e in self.inductive_sub_graph.edges if isinstance(e, JosephsonElement)]
         self.active_nodes, self.passive_nodes                 = self._partition_nodes()
         self.N                                                = len(self.active_nodes)
-        self.P                                                = self.N + len(self.passive_nodes) + 1 # for ground
+        self.P                                                = self.N + len(self.passive_nodes) + 1
         self.capacitance_matrix, self.inv_inductance_matrix   = self._build_matrices()
         self.inv_capacitance_matrix                           = np.linalg.inv(self.capacitance_matrix)
         self.offset_dict                                      = graph_rep["external_flux"]
         self.omega_squared                                    = self._build_omega_squared()
         self.normal_modes_squared, self.normal_vecs_squared   = np.linalg.eig(self.omega_squared)
-
-        # --- Placeholders (populated by later pipeline stages) ---
-        self.basis                                            = None
-        self.PHI_hat                                          = None
-        self.n_hat, self.H_hat                                = None, None
-        self.energies, self.states                            = None, None
-        self.n_hat_energy                                     = None
-        self.PHI_hat_energy                                   = None
-        self.t_vec, self.At_vec, self.P_0, self.P_1, self.P_2 = None, None, None, None, None
-        self.rabi_period                                      = None
-        self.fidelity                                         = None
-        self.U                                                = None
 
     # =====================================================================
     #   Graph Construction
@@ -67,251 +50,155 @@ class Circuit:
     def _build_master_graph(graph_rep: dict) -> Graph:
         """
         Build the full circuit graph from the user-supplied dictionary.
-        Creates Node/Branch objects and wires them together.
         Also breaks symmetry by adding a tiny capacitor to ground for
         any node that lacks a capacitive branch.
         """
         gnd = Node(label="gnd", branches=None)
-
-        label_node_dict = {"gnd" : gnd}
+        label_node_dict = {"gnd": gnd}
         branches = []
 
-        # --- Create node objects ---
-        node_labels = graph_rep["nodes"]
-        
-        for label in node_labels:
+        for label in graph_rep["nodes"]:
             label_node_dict[label] = Node(label=label, branches=None)
 
-        # --- Create and assign capacitive branches ---
-        capacitive_branches = graph_rep['capacitors']
-        
-        for entry in capacitive_branches:
-            node1_label = entry[0]
-            node2_label = entry[1]
-            
-            node1 = label_node_dict[node1_label]
-            node2 = label_node_dict[node2_label]
-            
-            capacitance = entry[2]
+        for entry in graph_rep['capacitors']:
+            node1 = label_node_dict[entry[0]]
+            node2 = label_node_dict[entry[1]]
+            cap = Capacitor(capacitance=entry[2], nodes=(node1, node2))
+            branches.append(cap)
+            node1.branches.append(cap)
+            node2.branches.append(cap)
 
-            capacitor = Capacitor(capacitance=capacitance, nodes=(node1, node2))
+        for entry in graph_rep['inductors']:
+            node1 = label_node_dict[entry[0]]
+            node2 = label_node_dict[entry[1]]
+            ind = Inductor(inductance=entry[2], nodes=(node1, node2))
+            branches.append(ind)
+            node1.branches.append(ind)
+            node2.branches.append(ind)
 
-            branches.append(capacitor)
-            node1.branches.append(capacitor)
-            node2.branches.append(capacitor)
+        for entry in graph_rep['josephson_elements']:
+            node1 = label_node_dict[entry[0]]
+            node2 = label_node_dict[entry[1]]
+            jj = JosephsonElement(josephson_energy=entry[2], nodes=(node1, node2))
+            branches.append(jj)
+            node1.branches.append(jj)
+            node2.branches.append(jj)
 
-        # --- Create and assign inductive branches ---
-        linear_inductive_branches = graph_rep['inductors']
-        josephson_element_branches = graph_rep['josephson_elements']
-        
-        for entry in linear_inductive_branches:
-            node1_label = entry[0]
-            node2_label = entry[1]
-            
-            node1 = label_node_dict[node1_label]
-            node2 = label_node_dict[node2_label]
-            
-            inductance = entry[2]
-
-            inductor = Inductor(inductance=inductance, nodes=(node1, node2))
-
-            branches.append(inductor)
-            node1.branches.append(inductor)
-            node2.branches.append(inductor)
-
-        for entry in josephson_element_branches:
-            node1 = entry[0]
-            node2 = entry[1]
-            
-            node1 = label_node_dict[node1_label]
-            node2 = label_node_dict[node2_label]
-            
-            josephson_energy = entry[2]
-
-            josephson_element = JosephsonElement(josephson_energy=josephson_energy, nodes=(node1, node2))
-
-            branches.append(josephson_element)
-            node1.branches.append(josephson_element)
-            node2.branches.append(josephson_element)
-
-        # --- Break symmetry ---
-        # Add a tiny parasitic capacitor to ground for nodes with no
-        # capacitive connection (prevents singular capacitance matrix)
+        # Break symmetry: add tiny parasitic cap to ground for nodes with no
+        # capacitive branch (prevents singular capacitance matrix)
         for node in label_node_dict.values():
             if node.label == "gnd":
                 continue
-            has_capacitive_branch = False
-            for branch in node.branches:
-                if isinstance(branch, CapacitiveElement):
-                    has_capacitive_branch = True
-                    break
-            if not has_capacitive_branch:
-                capacitor = Capacitor(value=1e-20, nodes=(node, label_node_dict["gnd"]))
+            has_cap = any(isinstance(b, CapacitiveElement) for b in node.branches)
+            if not has_cap:
+                cap = Capacitor(capacitance=1e-20, nodes=(node, gnd))
+                branches.append(cap)
+                node.branches.append(cap)
+                gnd.branches.append(cap)
 
-                branches.append(capacitor)
-                node.branches.append(capacitor)
-                label_node_dict["gnd"].branches.append(capacitor)
-
-        nodes = list(label_node_dict.values())
-        
-        return Graph(nodes, branches)
+        return Graph(list(label_node_dict.values()), branches)
 
     # =====================================================================
     #   Sub-Graph Construction
     # =====================================================================
 
-    def _build_sub_graphs(self) -> dict:
-        """
-        Split the master graph into capacitive and inductive sub-graphs.
-        Josephson junctions appear in both (they have C and nonlinear L).
-        """
+    def _build_sub_graphs(self):
+        """Split master graph into capacitive and inductive sub-graphs."""
         nodes    = self.circuit_graph.vertices
         branches = self.circuit_graph.edges
-
-        capacitive_branches = []
-        inductive_branches  = []
-
-        for branch in branches:
-            if isinstance(branch, CapacitiveElement):
-                capacitive_branches.append(branch)
-            if isinstance(branch, InductiveElement):
-                inductive_branches.append(branch)
-
-        return Graph(nodes, capacitive_branches), Graph(nodes, inductive_branches)
+        cap_branches = [b for b in branches if isinstance(b, CapacitiveElement)]
+        ind_branches = [b for b in branches if isinstance(b, InductiveElement)]
+        return Graph(nodes, cap_branches), Graph(nodes, ind_branches)
 
     # =====================================================================
     #   Node Partitioning
     # =====================================================================
 
     def _partition_nodes(self):
-        """
-        Classify nodes as active (connected to an inductor/Josephson Element) or passive.
-        Assumes symmetry has already been broken in _build_master_graph.
-        """
-        active_nodes    = []
-        passive_nodes   = []
-
+        """Classify nodes as active (connected to inductor/JJ) or passive."""
+        active, passive = [], []
         for node in self.circuit_graph.vertices:
             if node.label == "gnd":
                 continue
-            capacitive_degree, inductive_degree = node._get_degree()
-            if (inductive_degree > 0):
-                active_nodes.append(node)
-            else:
-                passive_nodes.append(node)
-
-        return active_nodes, passive_nodes
+            _, inductive_degree = node._get_degree()
+            (active if inductive_degree > 0 else passive).append(node)
+        return active, passive
 
     # =====================================================================
-    #   Matrix Construction (Capacitance & Inverse Inductance)
+    #   Matrix Construction
     # =====================================================================
 
     def _build_matrices(self):
         """
-        Build the reduced (ground-row/column removed) capacitance and
-        inverse-inductance matrices from the circuit graph topology.
-        Uses the standard graph-Laplacian approach.
+        Build the reduced (ground row/column removed) capacitance and
+        inverse-inductance matrices using the graph-Laplacian approach.
         """
-        capacitance_matrix      = np.zeros((self.P, self.P))
-        inv_inductance_matrix   = np.zeros((self.P, self.P))
+        C_mat = np.zeros((self.P, self.P))
+        L_inv = np.zeros((self.P, self.P))
 
         for branch in self.circuit_graph.edges:
-            node1_label = branch.nodes[0].label
-            node2_label = branch.nodes[1].label
+            n1 = branch.nodes[0].label
+            n2 = branch.nodes[1].label
+            j = 0 if n1 == "gnd" else self.labels.index(n1) + 1
+            k = 0 if n2 == "gnd" else self.labels.index(n2) + 1
 
-            # Map node label -> matrix index (ground = 0)
-            if node1_label == "gnd":
-                j = 0
-            else:
-                j = self.labels.index(node1_label) + 1
-
-            if node2_label == "gnd":
-                k = 0
-            else:
-                k = self.labels.index(node2_label) + 1
-
-            # Populate off-diagonal entries
             if isinstance(branch, Capacitor):
-                capacitance_matrix[j][k] += -branch.C
-                capacitance_matrix[k][j] += -branch.C
+                C_mat[j][k] -= branch.C
+                C_mat[k][j] -= branch.C
             elif isinstance(branch, Inductor):
-                inv_inductance_matrix[j][k] += -1 / branch.L
-                inv_inductance_matrix[k][j] += -1 / branch.L
+                L_inv[j][k] -= 1 / branch.L
+                L_inv[k][j] -= 1 / branch.L
 
-        # Fill diagonal so each row sums to zero (Laplacian property)
         for j in range(self.P):
-            capacitance_matrix[j][j]    = -1 * np.sum(capacitance_matrix[j]).item()
-            inv_inductance_matrix[j][j] = -1 * np.sum(inv_inductance_matrix[j]).item()
+            C_mat[j][j] = -np.sum(C_mat[j])
+            L_inv[j][j] = -np.sum(L_inv[j])
 
-        # Remove ground node (row 0, col 0) to get reduced matrices
-        capacitance_matrix = np.delete(capacitance_matrix, 0, axis=0)
-        capacitance_matrix = np.delete(capacitance_matrix, 0, axis=1)
-
-        inv_inductance_matrix = np.delete(inv_inductance_matrix, 0, axis=0)
-        inv_inductance_matrix = np.delete(inv_inductance_matrix, 0, axis=1)
-
-        return capacitance_matrix, inv_inductance_matrix
+        C_mat = np.delete(np.delete(C_mat, 0, axis=0), 0, axis=1)
+        L_inv = np.delete(np.delete(L_inv, 0, axis=0), 0, axis=1)
+        return C_mat, L_inv
 
     # =====================================================================
     #   Classical Mechanics Helpers
     # =====================================================================
 
     def _get_node_flux_dot(self, node_charge):
-        """Convert node charges to node flux derivatives (voltages)."""
         return self.inv_capacitance_matrix @ node_charge
 
     def get_kinetic_energy(self, node_charge):
-        """T = (1/2) * dPhi^T * C * dPhi"""
         node_flux_dot = self._get_node_flux_dot(node_charge)
         return (node_flux_dot.T @ self.capacitance_matrix @ node_flux_dot) / 2
 
     def get_potential_energy(self, node_flux: np.ndarray):
-        """
-        Total potential energy = linear (inductive) + nonlinear (Josephson).
-        Includes external flux offsets for loops with applied magnetic flux.
-        """
-        # --- Linear inductive term ---
+        """Total potential energy = linear (inductive) + nonlinear (Josephson)."""
+        # Linear inductive term
         if self.inv_inductance_matrix.size > 0 and np.any(self.inv_inductance_matrix != 0):
-            term_1 = (node_flux.T @ self.inv_inductance_matrix @ node_flux) / 2
+            linear_term = (node_flux.T @ self.inv_inductance_matrix @ node_flux) / 2
         else:
-            term_1 = 0
+            linear_term = 0
 
-        # --- External flux offset correction ---
-        term_2 = 0
-        for (node1_label, node2_label), offset in self.offset_dict.items():
-                j = self.labels.index(node1_label)
-                k = self.labels.index(node2_label)
+        # External flux correction
+        ext_term = 0
+        for (n1_label, n2_label), offset in self.offset_dict.items():
+            j = self.labels.index(n1_label)
+            k = self.labels.index(n2_label)
+            inductance = -1 / self.inv_inductance_matrix[j][k]
+            ext_term += ((node_flux[j] - node_flux[k]) * offset) / inductance
 
-                inductance = -1 / self.inv_inductance_matrix[j][k]
-                term_2 += ((node_flux[j] - node_flux[k]) * offset) / inductance
+        # Josephson (nonlinear) term
+        jj_term = 0
+        for jj in self.josephson_elements:
+            n1_label = jj.nodes[0].label
+            n2_label = jj.nodes[1].label
+            phi1 = node_flux[self.labels.index(n1_label)] if n1_label != "gnd" else 0
+            phi2 = node_flux[self.labels.index(n2_label)] if n2_label != "gnd" else 0
+            jj_term += -jj.EJ * np.cos((phi1 - phi2) / PHI_0)
 
-        linear_term = term_1 + term_2
+        return linear_term + ext_term + jj_term
 
-        # --- Nonlinear Josephson term: -EJ * cos(phi) ---
-        non_linear_term = 0
-
-        for inductive_element in self.inductive_sub_graph.edges:
-            if isinstance(inductive_element, JosephsonElement):
-                node1 = inductive_element.nodes[0]
-                node2 = inductive_element.nodes[1]
-                
-                node1_label = node1.label
-                node2_label = node2.label
-                
-                EJ          = inductive_element.EJ
-
-                node1_flux = node_flux[self.labels.index(node1_label)] if node1_label != "gnd" else 0
-                node2_flux = node_flux[self.labels.index(node2_label)] if node2_label != "gnd" else 0
-
-                branch_flux = node1_flux - node2_flux
-                phase = branch_flux / PHI_0
-
-                non_linear_term += -EJ * np.cos(phase)
-
-        return linear_term + non_linear_term
+    def get_hamiltonian(self, node_flux, node_charge):
+        return 0.5 * (node_charge.T @ self.inv_capacitance_matrix @ node_charge) + self.get_potential_energy(node_flux)
 
     def get_lagrangian(self, node_flux, node_charge):
-        """L = T - V"""
         return self.get_kinetic_energy(node_charge) - self.get_potential_energy(node_flux)
 
     # =====================================================================
@@ -319,327 +206,27 @@ class Circuit:
     # =====================================================================
 
     def _build_omega_squared(self):
-        """
-        Compute omega^2 = C^{-1} * L^{-1} for normal mode decomposition.
-        Returns zeros for purely nonlinear (no linear inductor) circuits.
-        """
         if np.any(self.inv_inductance_matrix != 0):
             return self.inv_capacitance_matrix @ self.inv_inductance_matrix
-        else:
-            return np.zeros((self.N, self.N))
-
-    def get_hamiltonian(self, node_flux, node_charge):
-        """H = (1/2) * Q^T * C^{-1} * Q + V(Phi)"""
-        return 0.5 * (node_charge.T @ self.inv_capacitance_matrix @ node_charge) + self.get_potential_energy(node_flux)
-
-    # =====================================================================
-    #   Quantization (Pure Linear ==> Fock Basis) (Josephson Element ==> Charge Basis)
-    # =====================================================================
-
-    def _quantize(self, n_cut: int):
-        """
-        Build the charge operator n_hat and Hamiltonian H_hat in the
-        charge basis for a single-node circuit with one Josephson junction.
-
-        Truncates Hilbert space to Cooper pair numbers n in [-n_cut, n_cut].
-        H = 4*EC*n^2 - (EJ/2)*(|n><n+1| + |n+1><n|)
-        """
-        if self.N != 1:
-            raise NotImplementedError("Quantization currently supports single-node circuits only")
-
-        # Total capacitance
-        C = self.capacitance_matrix[0][0]
-        # Cost to add one Cooper pair of charge
-        EC = e**2 / (2*C)
-
-        # If a Josephson element is present, construct H in the charge basis
-        if len(self.josephson_elements) > 0:
-            self.basis = "charge"
-            EJ = self.josephson_elements[0].EJ
-            # Define Hilbert space
-            # e.g. [-20, -19, ..., 0, ..., 19, 20] for n_cut = 20
-            # each n represents n Cooper pairs on the island
-            n_vals = np.arange(-n_cut, n_cut + 1)
-            dim = len(n_vals)
-            n_hat = np.diag(n_vals)
-
-            # Build Hamiltonian Operator
-            H = (4 * EC * (n_hat @ n_hat)) - 0.5 * EJ * (np.diag(np.ones(dim-1), 1) + np.diag(np.ones(dim-1), -1))
-
-            self.n_hat = n_hat # the charge operator, diagonal entires = # cooper pairs
-            self.H_hat = H
-        # If no Josephson elemnt (only linear inductors), contsruct H in Fock basis
-        else:
-            self.basis = "fock"
-            # Construct ladder operators
-            a_plus  = np.zeros((n_cut, n_cut))
-            a_minus = np.zeros((n_cut, n_cut))
-            
-            # Populate the operators
-            for m in range(n_cut):
-                for n in range(n_cut):
-                    if (m == n + 1):
-                        a_plus[m][n] = np.sqrt(n+1)
-                    elif (m == n - 1):
-                        a_minus[m][n] = np.sqrt(n)
-            
-            # Construct Q and PHI operators from ladder operators
-            omega = np.sqrt(self.omega_squared[0][0])
-            L     = 1 / self.inv_inductance_matrix[0][0]
-            Q_hat   = (np.sqrt(2*hbar*C*omega) / (2*1j)) * (a_minus - a_plus)
-            PHI_hat = (np.sqrt(2*hbar*C*omega) / (2*C*omega)) * (a_minus + a_plus)
-            
-            H_hat = ((Q_hat@Q_hat) / (2*C)) + ((PHI_hat@PHI_hat) / (2*L)) 
-            
-            self.n_hat   = a_plus @ a_minus
-            self.H_hat   = H_hat
-            self.PHI_hat = PHI_hat
-
-    # =====================================================================
-    #   Diagonalization
-    # =====================================================================
-
-    def _diagonalize(self):
-        """Diagonalize H_hat to obtain energy eigenvalues 
-        and eigenstates in charge/fock basis."""
-        self.energies, self.states = np.linalg.eigh(self.H_hat)
-
-    # =====================================================================
-    #   Basis Change (Charge/Fock -> Energy)
-    # =====================================================================
-
-    def _change_basis(self):
-        """Transform the charge/flux operator into the energy eigenbasis:
-        """
-        if self.basis == "charge":
-            self.n_hat_energy = np.conjugate(self.states).T @ self.n_hat @ self.states
-        elif self.basis == "fock":
-            self.PHI_hat_energy = np.conjugate(self.states).T @ self.PHI_hat @ self.states
-
-    # =====================================================================
-    #   Rabi Period Estimation
-    # =====================================================================
-
-    def _calculate_rabi_period(self, dim_sub: int, init_state: int, detuning: float, N_pulses: int, amplitude_scale: float, sigma: float, lambda_drag: float, steps_per_period: int, callback=None):
-        """
-        Run a long Crank-Nicolson simulation and extract the Rabi period
-        from the peaks of the smoothed P_1 population oscillation.
-        """
-        self.crank_nicolson(
-            dim_sub=dim_sub,
-            init_state=init_state,
-            detuning=detuning,
-            N_pulses=N_pulses,
-            amplitude_scale=amplitude_scale,
-            sigma=sigma,
-            lambda_drag=lambda_drag,
-            steps_per_period=steps_per_period,
-            callback=callback
-            )
-
-        # Smooth P_1 and find peaks to determine Rabi period
-        window = 1000
-        P1_smooth = np.convolve(self.P_1, np.ones(window)/window, mode='same')
-        peaks, _ = find_peaks(P1_smooth, distance=10000)
-
-        if len(peaks) >= 2:
-            self.rabi_period = self.t_vec[peaks[1]] - self.t_vec[peaks[0]]
-            return self.rabi_period
-        else:
-            return None
-
-    # =====================================================================
-    #   Drive Parameter Helpers
-    # =====================================================================
-
-    def _drive_params(self, detuning):
-        """Compute drive frequency and period from qubit transition + detuning."""
-        f0, f1 = self.energies[0:2] / h / 1e9
-        f01_Hz = (f1 - f0) * 1e9
-        f_drive = f01_Hz + detuning
-        T_drive = 1 / f_drive
-        return f01_Hz, f_drive, T_drive
-
-    # =====================================================================
-    #   Crank-Nicolson Time Evolution
-    # =====================================================================
-    
-    def crank_nicolson(self, dim_sub: int, init_state: int, detuning: float, N_pulses: int, amplitude_scale: float, sigma: float, lambda_drag: float, steps_per_period: int, callback=None):
-        """
-        Time-evolve an initial energy eigenstate under an SFQ Gaussian
-        pulse train using the Crank-Nicolson (implicit midpoint) method.
-
-        Parameters
-        ----------
-        dim_sub          : number of lowest energy levels to keep
-        init_state       : index of the initial eigenstate (0 = ground)
-        detuning         : drive frequency offset from f_01  [Hz]
-        N_pulses         : total number of SFQ pulses
-        amplitude_scale  : pulse amplitude as fraction of (E1 - E0)
-        sigma            : Gaussian pulse width              [s]
-        steps_per_period : time steps per drive period
-
-        Returns
-        -------
-        psi : final state vector in the truncated energy basis
-        """
-
-        # --- Truncate to dim_sub lowest levels ---
-        truncated_energies = self.energies[:dim_sub]
-        H_0 = np.diag(truncated_energies)            # Free Hamiltonian
-        if self.basis == "charge":
-            op = self.n_hat_energy[:dim_sub, :dim_sub]  # Charge operator (drive coupling)
-        elif self.basis == "fock":
-            op = self.PHI_hat_energy[:dim_sub, :dim_sub]
-            
-        # --- Drive frequency from qubit transition + detuning ---
-        f01_Hz, f_drive, T_drive = self._drive_params(detuning)
-        
-        f0, f1, f2 = self.energies[0:3] / hbar     # [rad/s]
-        alpha = (f2 - f1) - (f1 - f0)
-
-        # --- Time grid ---
-        T   = N_pulses * T_drive                      # Total simulation time [s]
-        dt  = T_drive / steps_per_period              # Time step             [s]
-        N_t = round(T / dt)                           # Number of time steps
-        t_vec = np.arange(N_t) * dt
-
-        # --- Pulse amplitude ---
-        A_0 = amplitude_scale * (truncated_energies[1]-truncated_energies[0])  # [J]
-
-        # --- Precompute Gaussian pulse centers ---
-        pulse_centers = np.arange(N_pulses) * T_drive
-
-        # --- Initial state: energy eigenstate |init_state> ---
-        psi = np.zeros(dim_sub);
-        psi[init_state] = 1.0;
-
-        # --- Pre-allocate result arrays ---
-        At_vec = np.zeros(N_t)      # Pulse envelope at each time step
-        At_dot_vec = np.zeros(N_t)  # Derivative of Pulse envelope as each time step
-        P_0 = np.zeros(N_t)         # Population of |0>
-        P_1 = np.zeros(N_t)         # Population of |1>
-        P_2 = np.zeros(N_t)         # Population of |2> (leakage)
-
-        I = np.eye(dim_sub)         # Identity matrix
-        
-        # Quadrature coupling operator for DRAG correction (1-2 subspace only)
-        # Hermitian σ_y-like operator: -i|1><2| + i|2><1| scaled by charge matrix element
-        n_12_y = np.zeros((dim_sub, dim_sub), dtype=complex)
-        n_12_y[1, 2] = -1j * op[1, 2]
-        n_12_y[2, 1] =  1j * op[2, 1]
-
-        # --- Main Crank-Nicolson loop ---
-        for i in range(N_t):
-            t = t_vec[i]
-            t_mid = t + (dt / 2)  # Midpoint for implicit scheme
-
-            # SFQ pulse train envelope: sum of Gaussians near t_mid
-            # (only include pulses within ~4 sigma for efficiency)
-            dt_to_pulses = t_mid - pulse_centers
-            mask = np.abs(dt_to_pulses) < 4 * sigma
-            
-            At      = A_0 * np.sum(np.exp(-0.5 * (dt_to_pulses[mask] / sigma)**2))
-            At_dot  = A_0 * np.sum((-1 * dt_to_pulses[mask] / (sigma**2)) * np.exp(-0.5 * (dt_to_pulses[mask] / sigma)**2))
-            
-            At_vec[i]     = At
-            At_dot_vec[i] = At_dot
-
-            # Full Hamiltonian at midpoint: H_0 + A(t) * n_op + DRAG
-            H_mid = H_0 + (At * op) + lambda_drag * (At_dot / alpha) * n_12_y
-
-            # Crank-Nicolson matrices:
-            #   A * psi(t+dt) = B * psi(t)
-            #   A = I + (i*dt/2hbar)*H,   B = I - (i*dt/2hbar)*H
-            A = I + (((1j*dt) / (2*hbar)) * H_mid)
-            B = I - (((1j*dt) / (2*hbar)) * H_mid)
-
-            # Solve for psi(t+dt)
-            psi = np.linalg.solve(A, B @ psi)
-            # print("psi: ")
-            # print(psi)
-
-            At_vec[i] = At
-            P_0[i]    = np.abs(psi[0])**2  # Ground state population
-            P_1[i]    = np.abs(psi[1])**2  # First excited state population
-            P_2[i]    = np.abs(psi[2])**2  # Second excited state (leakage)
-
-            C = self.capacitance_matrix[0][0]
-            omega = np.sqrt(self.omega_squared[0][0])
-            if callback is not None:
-                callback(i, self.basis, C, omega, self.states, t_vec, P_0, P_1, P_2, psi)
-
-        self.t_vec, self.At_vec, self.P_0, self.P_1, self.P_2 = t_vec, At_vec, P_0, P_1, P_2
-
-        return psi
-
-    # =====================================================================
-    #   Unitary Gate Construction
-    # =====================================================================
-
-    def _build_unitary(self, d: int, dim_sub: int, detuning: float, amplitude_scale: float, sigma: float, lambda_drag: float, steps_per_period: int):
-        """
-        Construct the d-column unitary by evolving each computational
-        basis state |0>, |1>, ..., |d-1> for a pi-pulse duration
-        (half a Rabi period) and collecting the resulting state vectors.
-        """
-        self.U = []
-
-        t_pi = self.rabi_period / 2  # Pi-pulse duration [s]
-
-        # Recompute drive parameters
-        f01_Hz, f_drive, T_drive = self._drive_params(detuning)
-
-        N_pi = round(t_pi / T_drive)  # Number of pulses for a pi-rotation
-
-        # Evolve each basis state and collect final states as columns
-        for i in range(d):
-            final_state = self.crank_nicolson(
-                dim_sub=dim_sub,
-                init_state=i,
-                detuning=detuning,
-                N_pulses=N_pi,
-                amplitude_scale=amplitude_scale,
-                sigma=sigma,
-                lambda_drag=lambda_drag,
-                steps_per_period=steps_per_period
-            )
-
-            # Appending eigenstates as rows, so will need to tranpose
-            self.U.append(final_state)
-
-        self.U = np.array(self.U).T  # Transpose so columns = evolved states
-
-    # =====================================================================
-    #   Gate Fidelity
-    # =====================================================================
-
-    def _calculate_fidelity(self, d: int, U_target: Optional[np.ndarray] = np.array([[0, 1], [1, 0]])):
-        """
-        Average gate fidelity:  F = |Tr(U_target^dag * U_actual)| / d
-        Default target is the Pauli-X gate.
-        """
-        return np.abs(np.trace(U_target.conjugate().T @ self.U[:d, :d])) / d
+        return np.zeros((self.N, self.N))
 
     # =====================================================================
     #   Connectivity Display
     # =====================================================================
 
     def connectivity(self):
-        """Return a human-readable string of the circuit's node-branch topology."""
-        s = ""
-        s += "--- Circuit Connectivity -\n"
+        s = "--- Circuit Connectivity ---\n"
         for node in self.circuit_graph.vertices:
-            s += (f"Node '{node.label}':\n")
+            s += f"Node '{node.label}':\n"
             for branch in node.branches:
-                other_node = [n for n in branch.nodes if n != node]
-                connection = f"connected to {other_node[0].label}" if other_node else "grounded"
+                other = [n for n in branch.nodes if n != node]
+                conn = f"connected to {other[0].label}" if other else "grounded"
                 if isinstance(branch, Capacitor):
-                    s += (f"  - {"Capacitor"} ({branch.C:.2e}) {connection}\n")
+                    s += f"  - Capacitor ({branch.C:.2e}) {conn}\n"
                 elif isinstance(branch, Inductor):
-                    s += (f"  - {"Inductor"} ({branch.L:.2e}) {connection}\n")
+                    s += f"  - Inductor ({branch.L:.2e}) {conn}\n"
                 else:
-                    s += (f"  - {"Josephson Element"} ({branch.EJ:.2e}) {connection}\n")
+                    s += f"  - Josephson Element ({branch.EJ:.2e}) {conn}\n"
         return s
 
     def __repr__(self):

@@ -1,10 +1,7 @@
 from __future__ import annotations
 from typing import Optional
-from scipy.constants import hbar, e
 import numpy as np
-
-# ---- Fundamental constant ----
-PHI_0 = hbar / (2 * e)  # Reduced flux quantum [Wb]
+from constants import PHI_0
 
 ######################################## NODE CLASS ########################################
 class Node:
