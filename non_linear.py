@@ -145,13 +145,14 @@ def main():
     _, f_drive, _ = circuit._drive_params(detuning)
     
     if LIVE_VISUALIZATION == True:
-        live_plotter = LivePlotter(circuit=circuit, 
+        live_plotter = LivePlotter(
+                                   basis = circuit.basis,
                                    f_drive=f_drive, 
                                    dim_sub=dim_sub, 
                                    n_cut=n_cut,
                                    min_flux=-np.pi, 
                                    max_flux=np.pi,
-                                   update_interval=500
+                                   update_interval=5
                                    )
         circuit._calculate_rabi_period(*crank_nic_params, callback=live_plotter.update)
         live_plotter.finalize()

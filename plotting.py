@@ -160,7 +160,7 @@ def plot_all(circuit, n_cut, min_flux, max_flux, num_phases, detuning):
     axes[0,0].plot(n_vals, np.abs(circuit.states[:, 2])**2, '-', label='|2>', markersize=4)
     axes[0,0].axvline(0, color='black', linestyle='--', alpha=0.3)
     axes[0,0].set_xlabel('Number of Cooper Pairs (n)')
-    axes[0,0].set_ylabel('Probability Density')
+    axes[0,0].set_ylabel('Probability')
     axes[0,0].set_title('Wavefunctions in Charge Basis')
     axes[0,0].legend()
     axes[0,0].grid(True, alpha=0.3)

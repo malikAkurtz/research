@@ -1,7 +1,7 @@
 import numpy as np
 import matplotlib.pyplot as plt
 from Circuit import Circuit, PHI_0, e
-from utils import charge_to_phase_basis
+from utils import *
 
 # -------------------------------------------------------------------------
 #   Live State Evolution Plotter
@@ -23,7 +23,8 @@ class LivePlotter:
       Right bot   — Leakage P_2 on its own y-scale (typically ~10⁻² or less)
     """
 
-    def __init__(self, circuit: Circuit, f_drive: float, dim_sub: int, n_cut: int, min_flux: float, max_flux: float, update_interval: int = 50):
+    def __init__(self, basis: str, f_drive: float, dim_sub: int, n_cut: int, min_flux: float, max_flux: float, update_interval: int = 50):
+        self.basis = basis
         self.n_cut = n_cut
         self.update_interval = update_interval
         self.dim_sub = dim_sub
@@ -31,35 +32,28 @@ class LivePlotter:
 
         # Trajectory storage
         self.traj_x = []
+        self.traj_y = []
         self.traj_z = []
 
         plt.ion()
         self.fig = plt.figure(figsize=(14, 6))
 
-        # ---- Top Left: rotating-frame Bloch disk (X-Z plane) ----
-        self.ax_bloch = self.fig.add_subplot(2, 2, 1, aspect='equal')
-        theta = np.linspace(0, 2 * np.pi, 100)
-        self.ax_bloch.plot(np.cos(theta), np.sin(theta), 'k-', alpha=0.15, linewidth=0.8)
-        self.ax_bloch.axhline(0, color='k', alpha=0.08, linewidth=0.5)
-        self.ax_bloch.axvline(0, color='k', alpha=0.08, linewidth=0.5)
-        self.ax_bloch.text(0, 1.15, r'$|0\rangle$', ha='center', fontsize=11)
-        self.ax_bloch.text(0, -1.15, r'$|1\rangle$', ha='center', fontsize=11)
-        self.ax_bloch.text(1.15, 0, r'$+X$', ha='left', fontsize=9, alpha=0.4)
-        self.ax_bloch.text(-1.15, 0, r'$-X$', ha='right', fontsize=9, alpha=0.4)
-        self.ax_bloch.set_xlim(-1.4, 1.4)
-        self.ax_bloch.set_ylim(-1.4, 1.4)
-        self.ax_bloch.set_title('Rotating Frame  (X-Z plane)')
-        self.ax_bloch.set_xlabel(r'$\langle X \rangle$  (coherence)')
-        self.ax_bloch.set_ylabel(r'$\langle Z \rangle$  (inversion)')
-        self.ax_bloch.grid(True, alpha=0.1)
-        # Line artists updated in-place (no cla needed → fast)
-        self.bloch_trail, = self.ax_bloch.plot([], [], color='tab:blue',
-                                                alpha=0.35, linewidth=0.8)
-        self.bloch_point = self.ax_bloch.scatter([], [], color='tab:red',
-                                                  s=60, zorder=5)
-
+        # ---- Top Left: wavefunction in charge/fock basis ----
+        self.ax_charge_state = self.fig.add_subplot(2, 3, 1)
+        self.state_line,      = self.ax_charge_state.plot([], [], color="tab:red", linewidth=2, label=f'psi')
+        if basis == "charge":
+            self.ax_charge_state.set_xlabel(r'# Cooper Pairs (n)$')
+        elif basis == "fock":
+            self.ax_charge_state.set_xlabel(r'Energy Quanta (n)$')
+        self.ax_charge_state.set_xlim(-self.n_cut, self.n_cut)
+        self.ax_charge_state.set_ylabel('Probability')
+        self.ax_charge_state.set_ylim(0.0, 1.0)
+        self.ax_charge_state.axvline(0, color='black', linestyle='--', alpha=0.3)
+        self.ax_charge_state.grid(True, alpha=0.3)
+        self.ax_charge_state.legend(loc='upper right', fontsize=8)
+        
         # ---- Right top: qubit populations ----
-        self.ax_pop = self.fig.add_subplot(2, 2, 2)
+        self.ax_pop = self.fig.add_subplot(2, 3, 2)
         self.line_p0, = self.ax_pop.plot([], [], label=r'$P_0$', linewidth=1.5)
         self.line_p1, = self.ax_pop.plot([], [], label=r'$P_1$', linewidth=1.5)
         self.ax_pop.set_ylabel('Population')
@@ -69,11 +63,11 @@ class LivePlotter:
         self.ax_pop.grid(True, alpha=0.3)
 
         # ---- Right bottom: leakage on its own scale ----
-        self.ax_leak = self.fig.add_subplot(2, 2, 4)
-        self.line_p2, = self.ax_leak.plot([], [], color='tab:red',
-                                           linewidth=1.5, label=r'$P_2$ (leakage)')
+        self.ax_leak = self.fig.add_subplot(2, 3, 3)
+        self.line_p2, = self.ax_leak.plot([], [], color='tab:green',
+                                           linewidth=1.5, label=r'$P_2$')
         self.ax_leak.set_xlabel('Time (ns)')
-        self.ax_leak.set_ylabel('Leakage')
+        self.ax_leak.set_ylabel('Probability')
         self.ax_leak.set_title('Leakage to Higher Levels')
         self.ax_leak.legend(loc='upper right', fontsize=8)
         self.ax_leak.grid(True, alpha=0.3)
@@ -82,33 +76,50 @@ class LivePlotter:
         self.fig.canvas.draw()
         self.fig.canvas.flush_events()
         
-        # ---- Left Bottom: wavefunction in phase basis overlayed on eigenvalues ----
-        self.ax_wave = self.fig.add_subplot(2, 2, 3)
+        # ---- Left Bottom: wavefunction in phase basis overlayed on phase vs potential energy ----
+        self.ax_wave = self.fig.add_subplot(2, 2, 4)
         self.min_flux, self.max_flux = min_flux, max_flux
         self.node_phases = np.linspace(min_flux, max_flux, 400)
 
-        # Plot static Potential Energy
-        U = np.array([circuit.get_potential_energy(np.array([phi * PHI_0])) for phi in self.node_phases])
-        self.ax_wave.plot(self.node_phases, U / e / 1e-3, 'k', linewidth=1.5, alpha=0.6, label='V(phi)')
-
-        # Create line objects for the 3 lowest wavefunctions
-        # We will shift these vertically by their energy levels in the update loop
         self.wave_line, = self.ax_wave.plot([], [], color="tab:red", linewidth=2, label=f'psi')
 
         self.ax_wave.set_xlabel(r'Phase $\phi$')
-        self.ax_wave.set_ylabel('Energy (meV)')
-        self.ax_wave.set_ylim(min(U/e/1e-3), max(U/e/1e-3) * 1.2) # Room for wavefunctions
+        self.ax_wave.set_xlim(self.min_flux, self.max_flux)
+        self.ax_wave.set_ylabel('Probability')
+        self.ax_wave.set_ylim(0.0, 8.0)
         self.ax_wave.legend(loc='upper right', fontsize=8)
+        
+        # ---- Bloch Sphere representation of psi ----
+        self.ax_bloch = self.fig.add_subplot(2, 2, 3, projection='3d')
 
-    def _psi_to_rotating_bloch(self, psi, t):
-        """Bloch X, Z in the frame rotating at f_drive."""
-        c0 = psi[0]
-        c1 = psi[1] * np.exp(1j * self.omega_d * t)
-        x = 2 * np.real(np.conj(c0) * c1)
-        z = np.abs(c0)**2 - np.abs(c1)**2
-        return x, z
+        # Draw wireframe sphere
+        u = np.linspace(0, 2 * np.pi, 40)
+        v = np.linspace(0, np.pi, 40)
+        x_sphere = np.outer(np.cos(u), np.sin(v))
+        y_sphere = np.outer(np.sin(u), np.sin(v))
+        z_sphere = np.outer(np.ones(u.size), np.cos(v))
+        self.ax_bloch.plot_wireframe(x_sphere, y_sphere, z_sphere, alpha=0.08, color='gray')
 
-    def update(self, step, energies, states, t_vec, P_0, P_1, P_2, psi):
+        # Reference points
+        self.ax_bloch.scatter(0, 0, 1, color='black', s=20)   # |0⟩
+        self.ax_bloch.scatter(0, 0, -1, color='black', s=20)   # |1⟩
+        self.ax_bloch.text(0, 0, 1.15, r'$|0\rangle$', ha='center')
+        self.ax_bloch.text(0, 0, -1.15, r'$|1\rangle$', ha='center')
+
+        # State point and trajectory
+        self.bloch_point = self.ax_bloch.scatter([], [], [], color='red', s=50)
+        self.bloch_trail, = self.ax_bloch.plot([], [], [], color='red', alpha=0.3, linewidth=1)
+
+        self.ax_bloch.set_xlim([-1, 1])
+        self.ax_bloch.set_ylim([-1, 1])
+        self.ax_bloch.set_zlim([-1, 1])
+        self.ax_bloch.set_xlabel('X')
+        self.ax_bloch.set_ylabel('Y')
+        self.ax_bloch.set_zlabel('Z')
+        self.ax_bloch.set_title('Bloch Sphere')
+        
+
+    def update(self, step, basis, C, omega, states, t_vec, P_0, P_1, P_2, psi):
         """Callback for crank_nicolson(). Redraws every update_interval steps."""
         if step % self.update_interval != 0 and step != len(t_vec) - 1:
             return
@@ -117,12 +128,16 @@ class LivePlotter:
         t_ns = t_vec[:s] * 1e9
         t = t_vec[step]
 
-        # --- Rotating-frame Bloch disk ---
-        bx, bz = self._psi_to_rotating_bloch(psi, t)
-        self.traj_x.append(bx)
-        self.traj_z.append(bz)
-        self.bloch_trail.set_data(self.traj_x, self.traj_z)
-        self.bloch_point.set_offsets([[bx, bz]])
+        # --- Wavefunction charge/fock basis ---
+        dim_sub = len(psi)
+        truncated_states = states[:, :dim_sub]
+        psi_original_basis = truncated_states @ psi
+        probs = np.abs(psi_original_basis)**2
+        if basis == "charge":
+            n_vals = np.arange(-self.n_cut, self.n_cut + 1)
+        elif basis == "fock":
+            n_vals = np.arange(self.n_cut)
+        self.state_line.set_data(n_vals, probs)
 
         # --- Qubit populations ---
         self.line_p0.set_data(t_ns, P_0[:s])
@@ -136,19 +151,33 @@ class LivePlotter:
         self.ax_leak.autoscale_view(scalex=False)
         
         # --- Phase basis projection ---
-        dim_sub = len(psi)
-        truncated_states = states[:, :dim_sub]
-        psi_charge_basis = truncated_states @ psi
-        psi_phase_basis  = charge_to_phase_basis(psi_charge_basis.reshape(-1, 1), 
+        if basis == "charge":
+            psi_phase_basis  = charge_to_phase_basis(psi_original_basis.reshape(-1, 1), 
+                                                 n_cut=self.n_cut, 
+                                                 phases=self.node_phases
+                                                 ).flatten()
+        elif basis == "fock":
+            psi_phase_basis  = fock_to_phase_basis(psi_original_basis.reshape(-1, 1), 
+                                                 C=C,
+                                                 omega=omega,
                                                  n_cut=self.n_cut, 
                                                  phases=self.node_phases
                                                  ).flatten()
         
         probs = np.abs(psi_phase_basis)**2
-        scaling_factor = 0.01  # Adjust this to make waves taller/shorter
-        self.wave_line.set_data(self.node_phases, (probs * scaling_factor))
+        self.wave_line.set_data(self.node_phases, probs)
             
-            
+        # --- Psi on Bloch Sphere
+        azimuth, inclanation = spherical_coords(state_energy_basis=psi)
+        x, y, z              = spherical_to_rectangular(azimuth=azimuth, inclanation=inclanation)
+        
+        self.traj_x.append(x)
+        self.traj_y.append(y)
+        self.traj_z.append(z)
+
+        self.bloch_point._offsets3d = ([x], [y], [z])
+        self.bloch_trail.set_data_3d(self.traj_x, self.traj_y, self.traj_z)
+        
         self.fig.canvas.draw_idle()
         self.fig.canvas.flush_events()
 

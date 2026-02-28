@@ -48,9 +48,12 @@ class Circuit:
         self.normal_modes_squared, self.normal_vecs_squared   = np.linalg.eig(self.omega_squared)
 
         # --- Placeholders (populated by later pipeline stages) ---
+        self.basis                                            = None
+        self.PHI_hat                                          = None
         self.n_hat, self.H_hat                                = None, None
         self.energies, self.states                            = None, None
         self.n_hat_energy                                     = None
+        self.PHI_hat_energy                                   = None
         self.t_vec, self.At_vec, self.P_0, self.P_1, self.P_2 = None, None, None, None, None
         self.rabi_period                                      = None
         self.fidelity                                         = None
@@ -330,7 +333,7 @@ class Circuit:
         return 0.5 * (node_charge.T @ self.inv_capacitance_matrix @ node_charge) + self.get_potential_energy(node_flux)
 
     # =====================================================================
-    #   Quantization (Charge Basis)
+    #   Quantization (Pure Linear ==> Fock Basis) (Josephson Element ==> Charge Basis)
     # =====================================================================
 
     def _quantize(self, n_cut: int):
@@ -344,44 +347,74 @@ class Circuit:
         if self.N != 1:
             raise NotImplementedError("Quantization currently supports single-node circuits only")
 
-        C_sum = self.capacitance_matrix[0][0]
-
-        if len(self.josephson_elements) > 0:
-            EJ = self.josephson_elements[0].EJ
-
+        # Total capacitance
+        C = self.capacitance_matrix[0][0]
         # Cost to add one Cooper pair of charge
-        EC = e**2 / (2*C_sum)
+        EC = e**2 / (2*C)
 
-        # Define Hilbert space
-        # e.g. [-20, -19, ..., 0, ..., 19, 20] for n_cut = 20
-        # each n represents n Cooper pairs on the island
-        n_vals = np.arange(-n_cut, n_cut + 1)
-        dim = len(n_vals)
-        n_hat = np.diag(n_vals)
+        # If a Josephson element is present, construct H in the charge basis
+        if len(self.josephson_elements) > 0:
+            self.basis = "charge"
+            EJ = self.josephson_elements[0].EJ
+            # Define Hilbert space
+            # e.g. [-20, -19, ..., 0, ..., 19, 20] for n_cut = 20
+            # each n represents n Cooper pairs on the island
+            n_vals = np.arange(-n_cut, n_cut + 1)
+            dim = len(n_vals)
+            n_hat = np.diag(n_vals)
 
-        # Build Hamiltonian Operator
-        H = (4 * EC * (n_hat @ n_hat)) - 0.5 * EJ * (np.diag(np.ones(dim-1), 1) + np.diag(np.ones(dim-1), -1))
+            # Build Hamiltonian Operator
+            H = (4 * EC * (n_hat @ n_hat)) - 0.5 * EJ * (np.diag(np.ones(dim-1), 1) + np.diag(np.ones(dim-1), -1))
 
-        self.n_hat = n_hat
-        self.H_hat = H
+            self.n_hat = n_hat # the charge operator, diagonal entires = # cooper pairs
+            self.H_hat = H
+        # If no Josephson elemnt (only linear inductors), contsruct H in Fock basis
+        else:
+            self.basis = "fock"
+            # Construct ladder operators
+            a_plus  = np.zeros((n_cut, n_cut))
+            a_minus = np.zeros((n_cut, n_cut))
+            
+            # Populate the operators
+            for m in range(n_cut):
+                for n in range(n_cut):
+                    if (m == n + 1):
+                        a_plus[m][n] = np.sqrt(n+1)
+                    elif (m == n - 1):
+                        a_minus[m][n] = np.sqrt(n)
+            
+            # Construct Q and PHI operators from ladder operators
+            omega = np.sqrt(self.omega_squared[0][0])
+            L     = 1 / self.inv_inductance_matrix[0][0]
+            Q_hat   = (np.sqrt(2*hbar*C*omega) / (2*1j)) * (a_minus - a_plus)
+            PHI_hat = (np.sqrt(2*hbar*C*omega) / (2*C*omega)) * (a_minus + a_plus)
+            
+            H_hat = ((Q_hat@Q_hat) / (2*C)) + ((PHI_hat@PHI_hat) / (2*L)) 
+            
+            self.n_hat   = a_plus @ a_minus
+            self.H_hat   = H_hat
+            self.PHI_hat = PHI_hat
 
     # =====================================================================
     #   Diagonalization
     # =====================================================================
 
     def _diagonalize(self):
-        """Diagonalize H_hat to obtain energy eigenvalues and eigenstates."""
+        """Diagonalize H_hat to obtain energy eigenvalues 
+        and eigenstates in charge/fock basis."""
         self.energies, self.states = np.linalg.eigh(self.H_hat)
 
     # =====================================================================
-    #   Basis Change (Charge -> Energy)
+    #   Basis Change (Charge/Fock -> Energy)
     # =====================================================================
 
     def _change_basis(self):
-        """Transform the charge operator into the energy eigenbasis:
-           n_hat_energy = S^dag * n_hat * S
+        """Transform the charge/flux operator into the energy eigenbasis:
         """
-        self.n_hat_energy = np.conjugate(self.states).T @ self.n_hat @ self.states
+        if self.basis == "charge":
+            self.n_hat_energy = np.conjugate(self.states).T @ self.n_hat @ self.states
+        elif self.basis == "fock":
+            self.PHI_hat_energy = np.conjugate(self.states).T @ self.PHI_hat @ self.states
 
     # =====================================================================
     #   Rabi Period Estimation
@@ -454,8 +487,11 @@ class Circuit:
         # --- Truncate to dim_sub lowest levels ---
         truncated_energies = self.energies[:dim_sub]
         H_0 = np.diag(truncated_energies)            # Free Hamiltonian
-        n_op = self.n_hat_energy[:dim_sub, :dim_sub]  # Charge operator (drive coupling)
-
+        if self.basis == "charge":
+            op = self.n_hat_energy[:dim_sub, :dim_sub]  # Charge operator (drive coupling)
+        elif self.basis == "fock":
+            op = self.PHI_hat_energy[:dim_sub, :dim_sub]
+            
         # --- Drive frequency from qubit transition + detuning ---
         f01_Hz, f_drive, T_drive = self._drive_params(detuning)
         
@@ -490,8 +526,8 @@ class Circuit:
         # Quadrature coupling operator for DRAG correction (1-2 subspace only)
         # Hermitian σ_y-like operator: -i|1><2| + i|2><1| scaled by charge matrix element
         n_12_y = np.zeros((dim_sub, dim_sub), dtype=complex)
-        n_12_y[1, 2] = -1j * n_op[1, 2]
-        n_12_y[2, 1] =  1j * n_op[2, 1]
+        n_12_y[1, 2] = -1j * op[1, 2]
+        n_12_y[2, 1] =  1j * op[2, 1]
 
         # --- Main Crank-Nicolson loop ---
         for i in range(N_t):
@@ -510,7 +546,7 @@ class Circuit:
             At_dot_vec[i] = At_dot
 
             # Full Hamiltonian at midpoint: H_0 + A(t) * n_op + DRAG
-            H_mid = H_0 + (At * n_op) + lambda_drag * (At_dot / alpha) * n_12_y
+            H_mid = H_0 + (At * op) + lambda_drag * (At_dot / alpha) * n_12_y
 
             # Crank-Nicolson matrices:
             #   A * psi(t+dt) = B * psi(t)
@@ -520,14 +556,18 @@ class Circuit:
 
             # Solve for psi(t+dt)
             psi = np.linalg.solve(A, B @ psi)
+            # print("psi: ")
+            # print(psi)
 
             At_vec[i] = At
             P_0[i]    = np.abs(psi[0])**2  # Ground state population
             P_1[i]    = np.abs(psi[1])**2  # First excited state population
             P_2[i]    = np.abs(psi[2])**2  # Second excited state (leakage)
 
+            C = self.capacitance_matrix[0][0]
+            omega = np.sqrt(self.omega_squared[0][0])
             if callback is not None:
-                callback(i, self.energies, self.states, t_vec, P_0, P_1, P_2, psi)
+                callback(i, self.basis, C, omega, self.states, t_vec, P_0, P_1, P_2, psi)
 
         self.t_vec, self.At_vec, self.P_0, self.P_1, self.P_2 = t_vec, At_vec, P_0, P_1, P_2
 
