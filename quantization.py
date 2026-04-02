@@ -12,7 +12,7 @@ from typing import Optional
 
 import numpy as np
 from constants import *
-
+from utils import create_ladder_operators
 from Circuit import Circuit
 
 
@@ -78,14 +78,7 @@ def quantize(circuit: Circuit, n_cut: int) -> QuantizationResult:
         omega   = np.sqrt(circuit.omega_squared[0][0])
         L       = 1 / circuit.inv_inductance_matrix[0][0]
 
-        a_plus  = np.zeros((n_cut, n_cut))
-        a_minus = np.zeros((n_cut, n_cut))
-        for m in range(n_cut):
-            for n in range(n_cut):
-                if m == n + 1:
-                    a_plus[m][n]  = np.sqrt(n + 1)
-                elif m == n - 1:
-                    a_minus[m][n] = np.sqrt(n)
+        a_plus, a_minus = create_ladder_operators(dim=dim)
 
         phi_zpf = np.sqrt(2 * hbar * C * omega) / (2 * C * omega * PHI_0)
         Q_zpf   = np.sqrt(2 * hbar * C * omega)

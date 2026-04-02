@@ -29,7 +29,7 @@ def main():
     # -------------------------------------------------------------------------
 
     fC    = 250e6   # Charging energy frequency EC/h [Hz]
-    EJ_EC = 50      # EJ/EC ratio (typical transmon)
+    EJ_EC = 50      # EJ/EC ratio (typical transmon) (higher ratio ==> deeper cosine potential well)
     n_cut = 20      # Charge-basis truncation
 
     drive_config = DriveParams(

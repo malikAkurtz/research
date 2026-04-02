@@ -2,6 +2,7 @@ import numpy as np
 from scipy.special import factorial
 from scipy.constants import hbar
 from scipy.special import hermite
+from scipy.linalg import expm
 
 from constants import PHI_0
 
@@ -31,6 +32,9 @@ def charge_to_phase_basis(states, n_cut, phases):
     E = np.exp(1j * np.outer(phases, n_vals))
     return E @ states
 
+# -------------------------------------------------------------------------
+#   Fock-to-Phase Basis Transform
+# -------------------------------------------------------------------------
 
 def fock_to_phase_basis(psi_fock, C, omega, n_cut, phases):
     xi = np.sqrt(C * omega / hbar) * PHI_0 * phases
@@ -68,3 +72,41 @@ def spherical_to_rectangular(azimuth, inclination):
     y = np.sin(inclination) * np.sin(azimuth)
     z = np.cos(inclination)
     return x, y, z
+
+def create_ladder_operators(dim: int):
+    """
+    Creates creation and annihilation operatorsin the Fock basis,
+    a (a-) and a_dagger (a+)
+    """
+    
+    a = np.zeros((dim, dim))
+    
+    for m in range(dim):
+        for n in range(dim):
+            if m == (n-1):
+                a[m][n] = np.sqrt(n)
+                
+    a_dagger = np.conjugate(a).T
+                
+    return a, a_dagger
+
+def create_kick_unitary(K: np.ndarray, theta: float):
+    """
+    Returns the U_kick unitary as defined in Shillito et al
+    """
+    
+    return expm((-theta / 2) * K)
+
+def create_free_evolution_unitary(H: np.ndarray, t: float):
+    """
+    Returns the free evolution unitary as defined in Shillito et al
+    """
+    
+    return expm(-1j * H * t)
+
+def measure_populations(psi: np.ndarray):
+    """
+    Returns mod square of each probability amplitude of psi
+    """
+    
+    return np.array([np.abs(psi[k])**2 for k in range(len(psi))])
